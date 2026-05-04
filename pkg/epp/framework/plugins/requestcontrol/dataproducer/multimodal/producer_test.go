@@ -61,6 +61,61 @@ func TestExtractMMHashesWithWeightsFromTokenizedPrompt(t *testing.T) {
 	assert.Equal(t, map[string]int{"image-a": 1, "image-b": 1}, hashes)
 }
 
+func TestExtractMMHashesWithPlaceholderWeightsFromMetadata(t *testing.T) {
+	producer := newTestProducer(t, &Parameters{WeightSource: "placeholder-count"}, nil)
+	hashes := producer.extractMMHashesWithWeights(&scheduling.InferenceRequest{
+		Body: &fwkrh.InferenceRequestBody{
+			MultiModalMetadata: &fwkrh.MultiModalMetadata{Items: []fwkrh.MultiModalItemMetadata{
+				{
+					Hash:                  "image-a",
+					PlaceholderCount:      64,
+					ExactHash:             true,
+					ExactPlaceholderCount: true,
+				},
+				{
+					Hash:                  "image-b",
+					PlaceholderCount:      324,
+					ExactHash:             true,
+					ExactPlaceholderCount: true,
+				},
+				{
+					Hash:                  "image-a",
+					PlaceholderCount:      16,
+					ExactHash:             true,
+					ExactPlaceholderCount: true,
+				},
+			}},
+		},
+	})
+
+	assert.Equal(t, map[string]int{"image-a": 64, "image-b": 324}, hashes)
+}
+
+func TestExtractMMHashesWithPlaceholderWeightsHonorsExactnessAndFallback(t *testing.T) {
+	producer := newTestProducer(t, &Parameters{WeightSource: "placeholder-count"}, nil)
+	hashes := producer.extractMMHashesWithWeights(&scheduling.InferenceRequest{
+		Body: &fwkrh.InferenceRequestBody{
+			MultiModalMetadata: &fwkrh.MultiModalMetadata{Items: []fwkrh.MultiModalItemMetadata{
+				{Hash: "exact", PlaceholderCount: 128, ExactHash: true, ExactPlaceholderCount: true},
+				{Hash: "approx-hash", PlaceholderCount: 256, ExactHash: false, ExactPlaceholderCount: true},
+				{Hash: "approx-count", PlaceholderCount: 512, ExactHash: true, ExactPlaceholderCount: false},
+			}},
+		},
+	})
+
+	assert.Equal(t, map[string]int{"exact": 128, "approx-hash": 1, "approx-count": 1}, hashes)
+
+	skipProducer := newTestProducer(t, &Parameters{WeightSource: "placeholder-count", FallbackWeight: "skip"}, nil)
+	hashes = skipProducer.extractMMHashesWithWeights(&scheduling.InferenceRequest{
+		Body: &fwkrh.InferenceRequestBody{
+			MultiModalMetadata: &fwkrh.MultiModalMetadata{Items: []fwkrh.MultiModalItemMetadata{
+				{Hash: "approx-hash", PlaceholderCount: 256, ExactHash: false, ExactPlaceholderCount: true},
+			}},
+		},
+	})
+	assert.Nil(t, hashes)
+}
+
 func TestExtractMMHashesWithWeightsFromStructuredChat(t *testing.T) {
 	request := &scheduling.InferenceRequest{
 		Body: &fwkrh.InferenceRequestBody{
@@ -108,6 +163,30 @@ func TestPrepareDataMatchesMultiplePodsAndPreRequestUpdatesPlacement(t *testing.
 	assert.Contains(t, cache["hash-a"], podB.String())
 	assert.Contains(t, cache["hash-a"], podC.String())
 	assert.Contains(t, cache["hash-c"], podC.String())
+}
+
+func TestPrepareDataUsesWeightedMetadataInPlaceholderMode(t *testing.T) {
+	producer := newTestProducer(t, &Parameters{WeightSource: "placeholder-count"}, nil)
+	podA := k8stypes.NamespacedName{Namespace: "default", Name: "pod-a"}
+	podB := k8stypes.NamespacedName{Namespace: "default", Name: "pod-b"}
+	producer.putCacheEntry("small", podA)
+
+	endpointA := newEndpoint(podA)
+	endpointB := newEndpoint(podB)
+	request := &scheduling.InferenceRequest{
+		RequestId: "weighted",
+		Body: &fwkrh.InferenceRequestBody{
+			MultiModalMetadata: &fwkrh.MultiModalMetadata{Items: []fwkrh.MultiModalItemMetadata{
+				{Hash: "small", PlaceholderCount: 64, ExactHash: true, ExactPlaceholderCount: true},
+				{Hash: "large", PlaceholderCount: 1369, ExactHash: true, ExactPlaceholderCount: true},
+			}},
+		},
+	}
+
+	require.NoError(t, producer.PrepareRequestData(context.Background(), request, []scheduling.Endpoint{endpointA, endpointB}))
+
+	assertMatchInfo(t, endpointA, 64, 1433, map[string]int{"small": 64})
+	assertMatchInfo(t, endpointB, 0, 1433, map[string]int{})
 }
 
 func TestLRUEviction(t *testing.T) {

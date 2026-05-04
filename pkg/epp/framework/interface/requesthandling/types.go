@@ -80,6 +80,9 @@ type InferenceRequestBody struct {
 	// TokenizedPrompt contains parser-derived tokenization results when available.
 	// It is nil when the request was not already tokenized.
 	TokenizedPrompt *TokenizedPrompt `json:"-"`
+	// MultiModalMetadata contains lightweight multimodal metadata produced
+	// without full prompt tokenization.
+	MultiModalMetadata *MultiModalMetadata `json:"-"`
 
 	// Stream indicates whether the request specifies a streaming response (e.g., via a stream field).
 	// This typically implies the model server's response will be streamed.
@@ -109,6 +112,26 @@ type MultiModalFeature struct {
 	Offset int
 	// Length is the number of placeholder tokens this item occupies in TokenIDs.
 	Length int
+}
+
+// MultiModalMetadata contains lightweight per-item multimodal metadata for
+// scheduler decisions that need hashes and placeholder-count weights but not
+// full token IDs.
+type MultiModalMetadata struct {
+	Items []MultiModalItemMetadata
+}
+
+// MultiModalItemMetadata describes one multimodal item.
+type MultiModalItemMetadata struct {
+	Modality              Modality
+	Hash                  string
+	PlaceholderCount      int
+	Width                 int
+	Height                int
+	Source                string
+	ExactHash             bool
+	ExactPlaceholderCount bool
+	FallbackUsed          bool
 }
 
 // PromptText returns a plain-text representation of the prompt from whichever

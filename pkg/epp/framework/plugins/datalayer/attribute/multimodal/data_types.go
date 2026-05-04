@@ -26,6 +26,10 @@ const (
 	// EncoderCacheMatchInfoKey is attached to endpoints by the multimodal data
 	// producer and consumed by scorer/latency plugins that need encoder-cache locality.
 	EncoderCacheMatchInfoKey = "MultiModalEncoderCacheMatchInfoKey"
+
+	// RequestMetadataKey is produced on requests by the lightweight multimodal
+	// metadata producer and consumed by the encoder-cache data producer.
+	RequestMetadataKey = "MultiModalRequestMetadataKey"
 )
 
 // EncoderCacheMatchInfo summarizes how much of a request's multimodal encoder

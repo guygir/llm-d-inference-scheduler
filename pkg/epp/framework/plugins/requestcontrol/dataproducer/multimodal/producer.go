@@ -51,8 +51,12 @@ const (
 	// ProducedKey is the data key emitted by this producer.
 	ProducedKey = attrmm.EncoderCacheMatchInfoKey
 
-	defaultCacheSize       = 10000
-	defaultRequestStateTTL = 30 * time.Second
+	defaultCacheSize         = 10000
+	defaultRequestStateTTL   = 30 * time.Second
+	weightSourceUnit         = "unit"
+	weightSourcePlaceholders = "placeholder-count"
+	fallbackWeightUnit       = "unit"
+	fallbackWeightSkip       = "skip"
 )
 
 var (
@@ -64,6 +68,12 @@ var (
 type Parameters struct {
 	// CacheSize defines the maximum number of mm_hash -> pod-set entries to track.
 	CacheSize int `json:"cacheSize"`
+	// WeightSource controls whether weights are unit-sized or placeholder-count sized.
+	WeightSource string `json:"weightSource,omitempty"`
+	// RequireExactMetadata requires exact hash and exact placeholder count for weighted metadata.
+	RequireExactMetadata *bool `json:"requireExactMetadata,omitempty"`
+	// FallbackWeight controls unsupported/non-exact metadata fallback: unit or skip.
+	FallbackWeight string `json:"fallbackWeight,omitempty"`
 }
 
 // Factory creates a multimodal encoder-cache data producer.
@@ -85,12 +95,15 @@ func Factory(name string, rawParameters json.RawMessage, handle plugin.Handle) (
 // Producer tracks multimodal content hashes and the pods that likely hold their
 // encoder-cache entries.
 type Producer struct {
-	typedName       plugin.TypedName
-	cache           *lru.Cache[string, map[string]struct{}]
-	requestStates   *ttlcache.Cache[string, map[string]int]
-	requestStateTTL time.Duration
-	podList         func() []k8stypes.NamespacedName
-	mutex           sync.RWMutex
+	typedName            plugin.TypedName
+	cache                *lru.Cache[string, map[string]struct{}]
+	requestStates        *ttlcache.Cache[string, map[string]int]
+	requestStateTTL      time.Duration
+	podList              func() []k8stypes.NamespacedName
+	weightSource         string
+	requireExactMetadata bool
+	fallbackWeight       string
+	mutex                sync.RWMutex
 }
 
 // New creates a Producer.
@@ -98,6 +111,26 @@ func New(ctx context.Context, params *Parameters, podList func() []k8stypes.Name
 	cacheSize := defaultCacheSize
 	if params != nil && params.CacheSize > 0 {
 		cacheSize = params.CacheSize
+	}
+	weightSource := weightSourceUnit
+	requireExactMetadata := true
+	fallbackWeight := fallbackWeightUnit
+	if params != nil {
+		if params.WeightSource != "" {
+			weightSource = params.WeightSource
+		}
+		if params.FallbackWeight != "" {
+			fallbackWeight = params.FallbackWeight
+		}
+		if params.RequireExactMetadata != nil {
+			requireExactMetadata = *params.RequireExactMetadata
+		}
+	}
+	if weightSource != weightSourceUnit && weightSource != weightSourcePlaceholders {
+		return nil, fmt.Errorf("unsupported weightSource %q", weightSource)
+	}
+	if fallbackWeight != fallbackWeightUnit && fallbackWeight != fallbackWeightSkip {
+		return nil, fmt.Errorf("unsupported fallbackWeight %q", fallbackWeight)
 	}
 
 	cache, err := lru.New[string, map[string]struct{}](cacheSize)
@@ -112,11 +145,14 @@ func New(ctx context.Context, params *Parameters, podList func() []k8stypes.Name
 	go cleanRequestStates(ctx, requestStates, defaultRequestStateTTL)
 
 	return &Producer{
-		typedName:       plugin.TypedName{Type: ProducerType},
-		cache:           cache,
-		requestStates:   requestStates,
-		requestStateTTL: defaultRequestStateTTL,
-		podList:         podList,
+		typedName:            plugin.TypedName{Type: ProducerType},
+		cache:                cache,
+		requestStates:        requestStates,
+		requestStateTTL:      defaultRequestStateTTL,
+		podList:              podList,
+		weightSource:         weightSource,
+		requireExactMetadata: requireExactMetadata,
+		fallbackWeight:       fallbackWeight,
 	}, nil
 }
 
@@ -138,13 +174,16 @@ func (p *Producer) Produces() map[string]any {
 
 // Consumes returns the data keys this plugin requires.
 func (p *Producer) Consumes() map[string]any {
+	if p.weightSource == weightSourcePlaceholders {
+		return map[string]any{attrmm.RequestMetadataKey: fwkrh.MultiModalMetadata{}}
+	}
 	return nil
 }
 
 // PrepareRequestData attaches multimodal encoder-cache match data to endpoints.
 func (p *Producer) PrepareRequestData(ctx context.Context, request *scheduling.InferenceRequest, endpoints []scheduling.Endpoint) error {
 	logger := log.FromContext(ctx).V(logging.DEBUG)
-	hashToWeight := ExtractMMHashesWithWeights(request)
+	hashToWeight := p.extractMMHashesWithWeights(request)
 	if len(hashToWeight) == 0 {
 		logger.Info("No multimodal content found, skipping encoder-cache match data")
 		return nil
@@ -241,6 +280,53 @@ func ExtractMMHashesWithWeights(request *scheduling.InferenceRequest) map[string
 	return nil
 }
 
+func (p *Producer) extractMMHashesWithWeights(request *scheduling.InferenceRequest) map[string]int {
+	if p == nil || p.weightSource == weightSourceUnit {
+		return ExtractMMHashesWithWeights(request)
+	}
+	if request == nil || request.Body == nil {
+		return nil
+	}
+	if request.Body.MultiModalMetadata != nil && len(request.Body.MultiModalMetadata.Items) > 0 {
+		if weighted := p.hashesFromMetadata(request.Body.MultiModalMetadata); len(weighted) > 0 {
+			return weighted
+		}
+		if p.fallbackWeight == fallbackWeightSkip {
+			return nil
+		}
+	}
+	if request.Body.TokenizedPrompt != nil && len(request.Body.TokenizedPrompt.MultiModalFeatures) > 0 {
+		return hashesFromTokenizedPromptWeighted(request.Body.TokenizedPrompt.MultiModalFeatures)
+	}
+	if p.fallbackWeight == fallbackWeightSkip {
+		return nil
+	}
+	return ExtractMMHashesWithWeights(request)
+}
+
+func (p *Producer) hashesFromMetadata(metadata *fwkrh.MultiModalMetadata) map[string]int {
+	hashToWeight := map[string]int{}
+	for _, item := range metadata.Items {
+		if item.Hash == "" {
+			continue
+		}
+		if p.requireExactMetadata && (!item.ExactHash || !item.ExactPlaceholderCount) {
+			if p.fallbackWeight == fallbackWeightUnit {
+				addMaxWeight(hashToWeight, item.Hash, 1)
+			}
+			continue
+		}
+		if item.PlaceholderCount <= 0 {
+			if p.fallbackWeight == fallbackWeightUnit {
+				addMaxWeight(hashToWeight, item.Hash, 1)
+			}
+			continue
+		}
+		addMaxWeight(hashToWeight, item.Hash, item.PlaceholderCount)
+	}
+	return emptyToNil(hashToWeight)
+}
+
 func hashesFromTokenizedPrompt(features []fwkrh.MultiModalFeature) map[string]int {
 	hashToWeight := map[string]int{}
 	for _, feature := range features {
@@ -248,6 +334,17 @@ func hashesFromTokenizedPrompt(features []fwkrh.MultiModalFeature) map[string]in
 			continue
 		}
 		addMaxWeight(hashToWeight, feature.Hash, 1)
+	}
+	return emptyToNil(hashToWeight)
+}
+
+func hashesFromTokenizedPromptWeighted(features []fwkrh.MultiModalFeature) map[string]int {
+	hashToWeight := map[string]int{}
+	for _, feature := range features {
+		if feature.Hash == "" {
+			continue
+		}
+		addMaxWeight(hashToWeight, feature.Hash, feature.Length)
 	}
 	return emptyToNil(hashToWeight)
 }

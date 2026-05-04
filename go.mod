@@ -2,6 +2,8 @@ module github.com/llm-d/llm-d-inference-scheduler
 
 go 1.25.7
 
+replace github.com/llm-d/llm-d-kv-cache => ../llm-d-kv-cache
+
 // Pinned to go1.25.8 to ensure the fix for CVE-2025-61729 (GO-2025-4155) is included (requires >= 1.25.5)
 toolchain go1.25.8
 
