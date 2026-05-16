@@ -31,6 +31,7 @@ import (
 	fwkrh "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/requesthandling"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/scheduling"
 	attrmm "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/plugins/datalayer/attribute/multimodal"
+	tokenproducer "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/plugins/requestcontrol/dataproducer/tokenizer"
 )
 
 func TestFactory(t *testing.T) {
@@ -45,6 +46,20 @@ func TestFactory(t *testing.T) {
 
 	_, err = Factory("bad", json.RawMessage(`{"cacheSize":"bad"}`), &testHandle{ctx: context.Background()})
 	require.Error(t, err)
+
+	created, err = WeightedFactory("weighted-mm-producer", raw, &testHandle{ctx: context.Background()})
+	require.NoError(t, err)
+	require.NotNil(t, created)
+	assert.Equal(t, "weighted-mm-producer", created.TypedName().Name)
+}
+
+func TestConsumesOnlyRequiresTokenizedPromptForWeightedProducer(t *testing.T) {
+	producer := newTestProducer(t, nil, nil)
+	assert.Nil(t, producer.Consumes())
+
+	weightedProducer := newTestWeightedProducer(t, nil, nil)
+	consumes := weightedProducer.Consumes()
+	assert.Contains(t, consumes, tokenproducer.TokenizedPromptKey)
 }
 
 func TestExtractMMItemsFromTokenizedPrompt(t *testing.T) {
@@ -61,6 +76,22 @@ func TestExtractMMItemsFromTokenizedPrompt(t *testing.T) {
 	})
 
 	assert.Equal(t, []attrmm.MatchItem{{Hash: "image-a", Size: 1}, {Hash: "image-b", Size: 1}}, items)
+}
+
+func TestExtractWeightedMMItemsFromTokenizedPrompt(t *testing.T) {
+	items := ExtractWeightedMMItems(&scheduling.InferenceRequest{
+		Body: &fwkrh.InferenceRequestBody{
+			TokenizedPrompt: &fwkrh.TokenizedPrompt{
+				MultiModalFeatures: []fwkrh.MultiModalFeature{
+					{Hash: "image-a", Length: 576},
+					{Hash: "image-b", Length: 0},
+					{Hash: "image-a", Length: 144},
+				},
+			},
+		},
+	})
+
+	assert.Equal(t, []attrmm.MatchItem{{Hash: "image-a", Size: 576}, {Hash: "image-b", Size: 1}}, items)
 }
 
 func TestExtractMMItemsFromStructuredChat(t *testing.T) {
@@ -201,6 +232,39 @@ func TestProduceMatchesMultiplePodsAndPreRequestUpdatesPlacement(t *testing.T) {
 	assert.Contains(t, cache["hash-c"], podC.String())
 }
 
+func TestWeightedProduceMatchesMultiplePodsAndPreRequestUpdatesPlacement(t *testing.T) {
+	producer := newTestWeightedProducer(t, nil, nil)
+	podA := k8stypes.NamespacedName{Namespace: "default", Name: "pod-a"}
+	podB := k8stypes.NamespacedName{Namespace: "default", Name: "pod-b"}
+	podC := k8stypes.NamespacedName{Namespace: "default", Name: "pod-c"}
+	producer.putCacheEntry("hash-a", podA, podB)
+
+	endpointA := newEndpoint(podA)
+	endpointB := newEndpoint(podB)
+	endpointC := newEndpoint(podC)
+	request := requestWithHashes("req-1", map[string]int{"hash-a": 80, "hash-c": 20})
+
+	require.NoError(t, producer.Produce(context.Background(), request, []scheduling.Endpoint{endpointA, endpointB, endpointC}))
+
+	assertWeightedMatchInfo(t, endpointA,
+		[]attrmm.MatchItem{{Hash: "hash-a", Size: 80}},
+		[]attrmm.MatchItem{{Hash: "hash-a", Size: 80}, {Hash: "hash-c", Size: 20}})
+	assertWeightedMatchInfo(t, endpointB,
+		[]attrmm.MatchItem{{Hash: "hash-a", Size: 80}},
+		[]attrmm.MatchItem{{Hash: "hash-a", Size: 80}, {Hash: "hash-c", Size: 20}})
+	assertWeightedMatchInfo(t, endpointC,
+		nil,
+		[]attrmm.MatchItem{{Hash: "hash-a", Size: 80}, {Hash: "hash-c", Size: 20}})
+
+	producer.PreRequest(context.Background(), request, schedulingResult(endpointC))
+
+	cache := producer.cacheSnapshot()
+	assert.Contains(t, cache["hash-a"], podA.String())
+	assert.Contains(t, cache["hash-a"], podB.String())
+	assert.Contains(t, cache["hash-a"], podC.String())
+	assert.Contains(t, cache["hash-c"], podC.String())
+}
+
 func TestLRUEviction(t *testing.T) {
 	producer := newTestProducer(t, &Parameters{CacheSize: 2}, nil)
 	endpoint := newEndpoint(k8stypes.NamespacedName{Namespace: "default", Name: "pod-a"})
@@ -298,6 +362,13 @@ func newTestProducer(t *testing.T, params *Parameters, podList func() []k8stypes
 	return producer
 }
 
+func newTestWeightedProducer(t *testing.T, params *Parameters, podList func() []k8stypes.NamespacedName) *Producer {
+	t.Helper()
+	producer, err := NewWeighted(context.Background(), params, podList)
+	require.NoError(t, err)
+	return producer
+}
+
 func newEndpoint(name k8stypes.NamespacedName) scheduling.Endpoint {
 	return scheduling.NewEndpoint(
 		&fwkdl.EndpointMetadata{NamespacedName: name},
@@ -330,7 +401,17 @@ func schedulingResult(target scheduling.Endpoint) *scheduling.SchedulingResult {
 
 func assertMatchInfo(t *testing.T, endpoint scheduling.Endpoint, matchedItems, requestItems []attrmm.MatchItem) {
 	t.Helper()
-	raw, ok := endpoint.Get(attrmm.EncoderCacheMatchInfoKey)
+	assertMatchInfoForKey(t, endpoint, attrmm.EncoderCacheMatchInfoKey, matchedItems, requestItems)
+}
+
+func assertWeightedMatchInfo(t *testing.T, endpoint scheduling.Endpoint, matchedItems, requestItems []attrmm.MatchItem) {
+	t.Helper()
+	assertMatchInfoForKey(t, endpoint, attrmm.WeightedEncoderCacheMatchInfoKey, matchedItems, requestItems)
+}
+
+func assertMatchInfoForKey(t *testing.T, endpoint scheduling.Endpoint, key string, matchedItems, requestItems []attrmm.MatchItem) {
+	t.Helper()
+	raw, ok := endpoint.Get(key)
 	require.True(t, ok)
 	info, ok := raw.(*attrmm.EncoderCacheMatchInfo)
 	require.True(t, ok)

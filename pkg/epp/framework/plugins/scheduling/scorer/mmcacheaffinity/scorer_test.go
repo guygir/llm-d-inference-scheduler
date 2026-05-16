@@ -34,6 +34,11 @@ func TestFactory(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, created)
 	assert.Equal(t, "mm-scorer", created.TypedName().Name)
+
+	created, err = WeightedFactory("weighted-mm-scorer", nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, created)
+	assert.Equal(t, "weighted-mm-scorer", created.TypedName().Name)
 }
 
 func TestScorerConsumesMatchInfo(t *testing.T) {
@@ -45,15 +50,42 @@ func TestScorerConsumesMatchInfo(t *testing.T) {
 	assert.Equal(t, Type, scorer.TypedName().Type)
 }
 
+func TestWeightedScorerConsumesWeightedMatchInfo(t *testing.T) {
+	scorer := NewWeighted()
+
+	consumes := scorer.Consumes()
+	assert.Contains(t, consumes, attrmm.WeightedEncoderCacheMatchInfoKey)
+	assert.NotContains(t, consumes, attrmm.EncoderCacheMatchInfoKey)
+	assert.Equal(t, scheduling.Affinity, scorer.Category())
+	assert.Equal(t, WeightedType, scorer.TypedName().Type)
+}
+
 func TestScoreFromProducedMatchInfo(t *testing.T) {
 	scorer := New()
 	endpointA := newEndpoint("default", "pod-a")
 	endpointB := newEndpoint("default", "pod-b")
 	endpointC := newEndpoint("default", "pod-c")
-	requestItems := []attrmm.MatchItem{{Hash: "image", Size: 80}, {Hash: "icon", Size: 20}}
-	endpointA.Put(attrmm.EncoderCacheMatchInfoKey, attrmm.NewEncoderCacheMatchInfo([]attrmm.MatchItem{{Hash: "image", Size: 80}}, requestItems))
-	endpointB.Put(attrmm.EncoderCacheMatchInfoKey, attrmm.NewEncoderCacheMatchInfo([]attrmm.MatchItem{{Hash: "icon", Size: 20}}, requestItems))
+	requestItems := []attrmm.MatchItem{{Hash: "image", Size: 1}, {Hash: "icon", Size: 1}}
+	endpointA.Put(attrmm.EncoderCacheMatchInfoKey, attrmm.NewEncoderCacheMatchInfo([]attrmm.MatchItem{{Hash: "image", Size: 1}}, requestItems))
+	endpointB.Put(attrmm.EncoderCacheMatchInfoKey, attrmm.NewEncoderCacheMatchInfo([]attrmm.MatchItem{{Hash: "icon", Size: 1}}, requestItems))
 	endpointC.Put(attrmm.EncoderCacheMatchInfoKey, attrmm.NewEncoderCacheMatchInfo(nil, requestItems))
+
+	scores := scorer.Score(context.Background(), scheduling.NewCycleState(), nil, []scheduling.Endpoint{endpointA, endpointB, endpointC})
+
+	assert.Equal(t, 0.5, scores[endpointA])
+	assert.Equal(t, 0.5, scores[endpointB])
+	assert.Equal(t, 0.0, scores[endpointC])
+}
+
+func TestWeightedScoreFromProducedMatchInfo(t *testing.T) {
+	scorer := NewWeighted()
+	endpointA := newEndpoint("default", "pod-a")
+	endpointB := newEndpoint("default", "pod-b")
+	endpointC := newEndpoint("default", "pod-c")
+	requestItems := []attrmm.MatchItem{{Hash: "image", Size: 80}, {Hash: "icon", Size: 20}}
+	endpointA.Put(attrmm.WeightedEncoderCacheMatchInfoKey, attrmm.NewEncoderCacheMatchInfo([]attrmm.MatchItem{{Hash: "image", Size: 80}}, requestItems))
+	endpointB.Put(attrmm.WeightedEncoderCacheMatchInfoKey, attrmm.NewEncoderCacheMatchInfo([]attrmm.MatchItem{{Hash: "icon", Size: 20}}, requestItems))
+	endpointC.Put(attrmm.WeightedEncoderCacheMatchInfoKey, attrmm.NewEncoderCacheMatchInfo(nil, requestItems))
 
 	scores := scorer.Score(context.Background(), scheduling.NewCycleState(), nil, []scheduling.Endpoint{endpointA, endpointB, endpointC})
 

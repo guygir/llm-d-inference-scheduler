@@ -1,6 +1,6 @@
 # Multimodal Embeddings Cache Producer Plugin
 
-**Type:** `mm-embeddings-cache-producer`
+**Types:** `mm-embeddings-cache-producer`, `weighted-mm-embeddings-cache-producer`
 
 Produces multimodal embeddings cache match data for downstream scheduling plugins.
 
@@ -17,22 +17,31 @@ endpoint so scorers can prefer pods that are likely to have already processed th
 same image, video, or audio input.
 
 Repeated references to the same multimodal hash within one request count once.
+The unweighted producer gives each unique item size `1`. The weighted producer
+uses the `TokenizedPrompt.MultiModalFeatures` placeholder length for each item,
+with a fallback size of `1`.
 
 ## Inputs Consumed
 
-This plugin declares:
+The unweighted producer does not declare required request data. It can use
+`TokenizedPrompt.MultiModalFeatures` when another plugin already produced it, but
+it remains usable without token-producer by falling back to typed structured media
+blocks.
+
+The weighted producer declares:
 
 - `TokenizedPrompt`
 
-When `token-producer` is present, this orders tokenization before multimodal match
-data production. If tokenized prompt data is absent at runtime, the producer falls
-back to typed structured chat-completions media blocks.
+This orders tokenization before weighted multimodal match data production so the
+producer can use vLLM-rendered placeholder lengths from #890 metadata.
 
 ## Data Produced
 
 This plugin produces:
 
 - `MultiModalEncoderCacheMatchInfoKey` (`EncoderCacheMatchInfo`)
+- `WeightedMultiModalEncoderCacheMatchInfoKey` (`EncoderCacheMatchInfo`) for the
+  weighted producer
 
 ## Configuration
 
@@ -61,11 +70,32 @@ schedulingProfiles:
         weight: 4
 ```
 
+**Weighted Configuration Example:**
+
+```yaml
+plugins:
+  - type: token-producer
+    parameters:
+      modelName: Qwen/Qwen2.5-1.5B-Instruct
+      vllm:
+        http: http://localhost:8000
+  - type: weighted-mm-embeddings-cache-producer
+    parameters:
+      cacheSize: 10000
+  - type: weighted-mm-embeddings-cache-scorer
+schedulingProfiles:
+  - name: decode
+    plugins:
+      - pluginRef: weighted-mm-embeddings-cache-scorer
+        weight: 4
+```
+
 ## Operational Notes
 
 - The cache is a best-effort routing signal, not a correctness dependency.
 - Endpoint delete events can remove stale pod entries when `endpoint-notification-source`
   is wired through `dataLayer`.
-- The producer remains tokenizer-free for request shapes where typed media blocks are
-  sufficient; `token-producer` is only required when relying on upstream multimodal
-  metadata.
+- The unweighted producer remains tokenizer-free for request shapes where typed
+  media blocks are sufficient.
+- The weighted producer requires `token-producer` because it relies on upstream
+  multimodal metadata for exact placeholder lengths.

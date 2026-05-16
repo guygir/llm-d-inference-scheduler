@@ -33,6 +33,9 @@ import (
 const (
 	// Type is the type name used to register the multimodal encoder-cache scorer.
 	Type = "mm-embeddings-cache-scorer"
+	// WeightedType is the type name used to register the weighted multimodal
+	// encoder-cache scorer.
+	WeightedType = "weighted-mm-embeddings-cache-scorer"
 )
 
 var (
@@ -45,14 +48,32 @@ func Factory(name string, _ json.RawMessage, _ plugin.Handle) (plugin.Plugin, er
 	return New().WithName(name), nil
 }
 
+// WeightedFactory creates a weighted multimodal encoder-cache affinity scorer.
+func WeightedFactory(name string, _ json.RawMessage, _ plugin.Handle) (plugin.Plugin, error) {
+	return NewWeighted().WithName(name), nil
+}
+
 // Scorer computes normalized endpoint affinity from produced multimodal match data.
 type Scorer struct {
-	typedName plugin.TypedName
+	typedName    plugin.TypedName
+	matchInfoKey string
 }
 
 // New creates a Scorer.
 func New() *Scorer {
-	return &Scorer{typedName: plugin.TypedName{Type: Type}}
+	return newScorer(Type, attrmm.EncoderCacheMatchInfoKey)
+}
+
+// NewWeighted creates a weighted multimodal encoder-cache affinity scorer.
+func NewWeighted() *Scorer {
+	return newScorer(WeightedType, attrmm.WeightedEncoderCacheMatchInfoKey)
+}
+
+func newScorer(scorerType string, matchInfoKey string) *Scorer {
+	return &Scorer{
+		typedName:    plugin.TypedName{Type: scorerType},
+		matchInfoKey: matchInfoKey,
+	}
 }
 
 // TypedName returns the plugin type/name.
@@ -73,7 +94,7 @@ func (s *Scorer) Category() scheduling.ScorerCategory {
 
 // Consumes returns the endpoint data consumed by this scorer.
 func (s *Scorer) Consumes() map[string]any {
-	return map[string]any{attrmm.EncoderCacheMatchInfoKey: attrmm.EncoderCacheMatchInfo{}}
+	return map[string]any{s.matchInfoKey: attrmm.EncoderCacheMatchInfo{}}
 }
 
 // Score scores endpoints by matched multimodal encoder-cache item size divided
@@ -91,7 +112,7 @@ func (s *Scorer) Score(ctx context.Context, _ *scheduling.CycleState, req *sched
 		if meta := endpoint.GetMetadata(); meta != nil {
 			pod = meta.PodName
 		}
-		info, ok := endpoint.Get(attrmm.EncoderCacheMatchInfoKey)
+		info, ok := endpoint.Get(s.matchInfoKey)
 		if !ok {
 			traceLogger.Info("mm-embeddings-cache: no match info, score 0", "requestID", requestID, "pod", pod, "scorer", s.typedName)
 			continue
