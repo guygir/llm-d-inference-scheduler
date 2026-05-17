@@ -51,8 +51,9 @@ import (
 const (
 	// TODO(https://github.com/kubernetes-sigs/gateway-api-inference-extension/issues/2081):
 	// Make this timeout configurable per-plugin or globally via the Director configuration to support plugins with
-	// varying latency profiles.
-	dataProducerTimeout = 400 * time.Millisecond
+	// varying latency profiles. Multimodal token-producer calls can include vLLM
+	// image preprocessing, so the fixed budget must be above sub-second latency.
+	dataProducerTimeout = 10 * time.Second
 )
 
 // Datastore defines the interface required by the Director.

@@ -35,7 +35,7 @@ func (p *Producer) PreRequest(ctx context.Context, request *scheduling.Inference
 	}
 	defer p.pluginState.Delete(request.RequestID)
 
-	state, err := plugin.ReadPluginStateKey[*requestState](p.pluginState, request.RequestID, plugin.StateKey(ProducerType))
+	state, err := plugin.ReadPluginStateKey[*requestState](p.pluginState, request.RequestID, p.stateKey)
 	if err != nil || len(state.items) == 0 {
 		logger.Info("No multimodal request state found, skipping encoder-cache update")
 		return

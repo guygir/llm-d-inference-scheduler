@@ -46,10 +46,11 @@ func RegisterAllPlugins() {
 	plugin.Register(srcmodels.ModelsDataSourceType, srcmodels.ModelDataSourceFactory)
 	plugin.Register(extmodels.ModelsExtractorType, extmodels.ModelServerExtractorFactory)
 	plugin.RegisterAsDefaultProducer(mmproducer.ProducerType, mmproducer.Factory, mmproducer.ProducedKey)
+	plugin.RegisterAsDefaultProducer(mmproducer.WeightedProducerType, mmproducer.WeightedFactory, mmproducer.WeightedProducedKey)
 	// pd decider plugins
 	plugin.Register(disagg.PrefixBasedPDDeciderPluginType, disagg.PrefixBasedPDDeciderPluginFactory)
 	plugin.Register(disagg.AlwaysDisaggPDDeciderPluginType, disagg.AlwaysDisaggPDDeciderPluginFactory)
-	plugin.Register(tokenizer.PluginType, tokenizer.PluginFactory)
+	plugin.RegisterAsDefaultProducer(tokenizer.PluginType, tokenizer.PluginFactory, tokenizer.TokenizedPromptKey)
 	plugin.RegisterAsDefaultProducer(inflightload.InFlightLoadProducerType, inflightload.InFlightLoadProducerFactory, attrconcurrency.InFlightLoadKey)
 	// Legacy alias - existing YAML configs using "tokenizer" continue to work, with a deprecation warning.
 	plugin.Register(tokenizer.LegacyPluginType, tokenizer.LegacyPluginFactory) //nolint:staticcheck // intentional: keep backward compatibility (SA1019)
@@ -57,4 +58,5 @@ func RegisterAllPlugins() {
 	plugin.Register(disagg.AlwaysDisaggMulimodalPluginType, disagg.AlwaysDisaggMulimodalDeciderPluginFactory)
 	plugin.Register(contextlengthaware.ContextLengthAwareType, contextlengthaware.Factory)
 	plugin.Register(mmcacheaffinity.Type, mmcacheaffinity.Factory)
+	plugin.Register(mmcacheaffinity.WeightedType, mmcacheaffinity.WeightedFactory)
 }

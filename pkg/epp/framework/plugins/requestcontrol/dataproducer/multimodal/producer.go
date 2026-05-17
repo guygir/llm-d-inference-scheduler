@@ -47,9 +47,14 @@ import (
 const (
 	// ProducerType is the type name used to register the multimodal data producer.
 	ProducerType = "mm-embeddings-cache-producer"
+	// WeightedProducerType is the type name used to register the weighted
+	// multimodal data producer.
+	WeightedProducerType = "weighted-mm-embeddings-cache-producer"
 
 	// ProducedKey is the data key emitted by this producer.
 	ProducedKey = attrmm.EncoderCacheMatchInfoKey
+	// WeightedProducedKey is the data key emitted by the weighted producer.
+	WeightedProducedKey = attrmm.WeightedEncoderCacheMatchInfoKey
 
 	defaultCacheSize = 10000
 )
@@ -85,11 +90,14 @@ func Factory(name string, rawParameters json.RawMessage, handle plugin.Handle) (
 // Producer tracks multimodal content hashes and the pods that likely hold their
 // encoder-cache entries.
 type Producer struct {
-	typedName   plugin.TypedName
-	cache       *lru.Cache[string, map[string]struct{}]
-	pluginState *plugin.PluginState
-	podList     func() []k8stypes.NamespacedName
-	mutex       sync.RWMutex
+	typedName           plugin.TypedName
+	producedKey         string
+	stateKey            plugin.StateKey
+	useTokenizedWeights bool
+	cache               *lru.Cache[string, map[string]struct{}]
+	pluginState         *plugin.PluginState
+	podList             func() []k8stypes.NamespacedName
+	mutex               sync.RWMutex
 }
 
 type requestState struct {
@@ -105,6 +113,32 @@ func (s *requestState) Clone() plugin.StateData {
 
 // New creates a Producer.
 func New(ctx context.Context, params *Parameters, podList func() []k8stypes.NamespacedName) (*Producer, error) {
+	return newProducer(ctx, ProducerType, ProducedKey, false, params, podList)
+}
+
+// WeightedFactory creates a weighted multimodal encoder-cache data producer.
+func WeightedFactory(name string, rawParameters json.RawMessage, handle plugin.Handle) (plugin.Plugin, error) {
+	parameters := Parameters{}
+	if rawParameters != nil {
+		if err := json.Unmarshal(rawParameters, &parameters); err != nil {
+			return nil, fmt.Errorf("failed to parse the parameters of the '%s' plugin - %w", WeightedProducerType, err)
+		}
+	}
+
+	p, err := NewWeighted(handle.Context(), &parameters, handle.PodList)
+	if err != nil {
+		return nil, err
+	}
+	return p.WithName(name), nil
+}
+
+// NewWeighted creates a producer that weights multimodal items by token-producer
+// placeholder length.
+func NewWeighted(ctx context.Context, params *Parameters, podList func() []k8stypes.NamespacedName) (*Producer, error) {
+	return newProducer(ctx, WeightedProducerType, WeightedProducedKey, true, params, podList)
+}
+
+func newProducer(ctx context.Context, producerType string, producedKey string, useTokenizedWeights bool, params *Parameters, podList func() []k8stypes.NamespacedName) (*Producer, error) {
 	cacheSize := defaultCacheSize
 	if params != nil && params.CacheSize > 0 {
 		cacheSize = params.CacheSize
@@ -116,10 +150,13 @@ func New(ctx context.Context, params *Parameters, podList func() []k8stypes.Name
 	}
 
 	return &Producer{
-		typedName:   plugin.TypedName{Type: ProducerType},
-		cache:       cache,
-		pluginState: plugin.NewPluginState(ctx),
-		podList:     podList,
+		typedName:           plugin.TypedName{Type: producerType},
+		producedKey:         producedKey,
+		stateKey:            plugin.StateKey(producerType),
+		useTokenizedWeights: useTokenizedWeights,
+		cache:               cache,
+		pluginState:         plugin.NewPluginState(ctx),
+		podList:             podList,
 	}, nil
 }
 
@@ -136,11 +173,14 @@ func (p *Producer) WithName(name string) *Producer {
 
 // Produces returns the data keys this plugin produces.
 func (p *Producer) Produces() map[string]any {
-	return map[string]any{ProducedKey: attrmm.EncoderCacheMatchInfo{}}
+	return map[string]any{p.producedKey: attrmm.EncoderCacheMatchInfo{}}
 }
 
 // Consumes returns the data keys this plugin requires.
 func (p *Producer) Consumes() map[string]any {
+	if !p.useTokenizedWeights {
+		return nil
+	}
 	return map[string]any{tokenproducer.TokenizedPromptKey: scheduling.TokenizedPrompt{}}
 }
 
@@ -152,14 +192,14 @@ func (p *Producer) PluginState() *plugin.PluginState {
 // Produce attaches multimodal encoder-cache match data to endpoints.
 func (p *Producer) Produce(ctx context.Context, request *scheduling.InferenceRequest, endpoints []scheduling.Endpoint) error {
 	logger := log.FromContext(ctx).V(logging.DEBUG)
-	requestItems := ExtractMMItems(request)
+	requestItems := p.extractMMItems(request)
 	if len(requestItems) == 0 {
 		logger.Info("No multimodal content found, skipping encoder-cache match data")
 		return nil
 	}
 
 	if request != nil && request.RequestID != "" {
-		p.pluginState.Write(request.RequestID, plugin.StateKey(ProducerType), &requestState{items: requestItems})
+		p.pluginState.Write(request.RequestID, p.stateKey, &requestState{items: requestItems})
 	}
 	// TODO(#1144): Removal of stale pods should happen in background for better performance.
 	p.removeStalePods()
@@ -169,7 +209,7 @@ func (p *Producer) Produce(ctx context.Context, request *scheduling.InferenceReq
 			continue
 		}
 		matchedItems := p.matchedItemsForPod(metadata.NamespacedName.String(), requestItems)
-		endpoint.Put(attrmm.EncoderCacheMatchInfoKey, attrmm.NewEncoderCacheMatchInfo(
+		endpoint.Put(p.producedKey, attrmm.NewEncoderCacheMatchInfo(
 			matchedItems,
 			requestItems,
 		))
@@ -182,12 +222,26 @@ func (p *Producer) Produce(ctx context.Context, request *scheduling.InferenceReq
 // for a request. Parser-provided multimodal features are preferred; if
 // unavailable, typed structured media blocks are hashed from stable identifiers.
 func ExtractMMItems(request *scheduling.InferenceRequest) []attrmm.MatchItem {
+	return extractMMItems(request, false)
+}
+
+// ExtractWeightedMMItems returns deterministic, unique multimodal items weighted
+// by token-producer placeholder length when available.
+func ExtractWeightedMMItems(request *scheduling.InferenceRequest) []attrmm.MatchItem {
+	return extractMMItems(request, true)
+}
+
+func (p *Producer) extractMMItems(request *scheduling.InferenceRequest) []attrmm.MatchItem {
+	return extractMMItems(request, p.useTokenizedWeights)
+}
+
+func extractMMItems(request *scheduling.InferenceRequest, useTokenizedWeights bool) []attrmm.MatchItem {
 	if request == nil || request.Body == nil {
 		return nil
 	}
 
 	if request.Body.TokenizedPrompt != nil && len(request.Body.TokenizedPrompt.MultiModalFeatures) > 0 {
-		return itemsFromTokenizedPrompt(request.Body.TokenizedPrompt.MultiModalFeatures)
+		return itemsFromTokenizedPrompt(request.Body.TokenizedPrompt.MultiModalFeatures, useTokenizedWeights)
 	}
 
 	if request.Body.ChatCompletions != nil {
@@ -197,15 +251,22 @@ func ExtractMMItems(request *scheduling.InferenceRequest) []attrmm.MatchItem {
 	return nil
 }
 
-func itemsFromTokenizedPrompt(features []fwkrh.MultiModalFeature) []attrmm.MatchItem {
+func itemsFromTokenizedPrompt(features []fwkrh.MultiModalFeature, useTokenizedWeights bool) []attrmm.MatchItem {
 	itemsByHash := map[string]attrmm.MatchItem{}
 	for _, feature := range features {
 		if feature.Hash == "" {
 			continue
 		}
-		addItem(itemsByHash, feature.Hash, 1)
+		addItem(itemsByHash, feature.Hash, tokenizedFeatureWeight(feature, useTokenizedWeights))
 	}
 	return sortedItems(itemsByHash)
+}
+
+func tokenizedFeatureWeight(feature fwkrh.MultiModalFeature, useTokenizedWeights bool) int {
+	if useTokenizedWeights && feature.Length > 0 {
+		return feature.Length
+	}
+	return 1
 }
 
 func itemsFromChat(request *fwkrh.ChatCompletionsRequest) []attrmm.MatchItem {
@@ -235,6 +296,9 @@ func contentHash(kind, identifier string) string {
 }
 
 func addItem(itemsByHash map[string]attrmm.MatchItem, hash string, size int) {
+	if existing, ok := itemsByHash[hash]; ok && existing.Size >= size {
+		return
+	}
 	itemsByHash[hash] = attrmm.MatchItem{Hash: hash, Size: size}
 }
 
@@ -271,6 +335,8 @@ func (p *Producer) matchedItemsForPod(pod string, requestItems []attrmm.MatchIte
 }
 
 func (p *Producer) removeStalePods() {
+	// TODO(https://github.com/llm-d/llm-d-router/issues/1144): move stale-pod
+	// cleanup to a periodic background path instead of doing it per request.
 	if p.podList == nil {
 		return
 	}

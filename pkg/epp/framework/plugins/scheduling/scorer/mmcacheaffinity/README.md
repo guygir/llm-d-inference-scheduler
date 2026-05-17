@@ -1,9 +1,9 @@
 # Multimodal Embeddings Cache Scorer Plugin
 
-**Type:** `mm-embeddings-cache-scorer`
+**Types:** `mm-embeddings-cache-scorer`, `weighted-mm-embeddings-cache-scorer`
 
 Scores candidate endpoints using multimodal embeddings cache match data produced
-by `mm-embeddings-cache-producer`.
+by `mm-embeddings-cache-producer` or `weighted-mm-embeddings-cache-producer`.
 
 ## What It Does
 
@@ -13,9 +13,13 @@ For each candidate endpoint, the scorer reads `EncoderCacheMatchInfo` and comput
 score = matchedItemSize / totalRequestItemSize
 ```
 
-For the unweighted producer path in this PR, every unique multimodal item has size
+For the unweighted producer path, every unique multimodal item has size
 `1`, so the score is the fraction of unique request multimodal hashes that are
 likely cached on the endpoint.
+
+For the weighted producer path, item size comes from the vLLM-rendered multimodal
+placeholder length in `TokenizedPrompt.MultiModalFeatures`, so larger MM items can
+contribute more strongly to endpoint affinity.
 
 This produces a normalized score in the range `[0, 1]`:
 
@@ -31,8 +35,10 @@ the endpoint receives score `0`.
 This scorer consumes:
 
 - `MultiModalEncoderCacheMatchInfoKey` (`EncoderCacheMatchInfo`)
+- `WeightedMultiModalEncoderCacheMatchInfoKey` (`EncoderCacheMatchInfo`) for the
+  weighted scorer
 
-The attribute is produced by `mm-embeddings-cache-producer` before scheduling.
+The attribute is produced by the matching producer before scheduling.
 
 ## Configuration
 
@@ -51,6 +57,28 @@ schedulingProfiles:
   - name: decode
     plugins:
       - pluginRef: mm-embeddings-cache-scorer
+        weight: 1
+      - pluginRef: max-score-picker
+```
+
+**Weighted Configuration Example:**
+
+```yaml
+plugins:
+  - type: token-producer
+    parameters:
+      modelName: Qwen/Qwen2.5-1.5B-Instruct
+      vllm:
+        http: http://localhost:8000
+  - type: weighted-mm-embeddings-cache-producer
+    parameters:
+      cacheSize: 10000
+  - type: weighted-mm-embeddings-cache-scorer
+  - type: max-score-picker
+schedulingProfiles:
+  - name: decode
+    plugins:
+      - pluginRef: weighted-mm-embeddings-cache-scorer
         weight: 1
       - pluginRef: max-score-picker
 ```

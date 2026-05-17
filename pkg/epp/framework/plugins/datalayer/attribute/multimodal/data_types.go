@@ -24,6 +24,9 @@ const (
 	// EncoderCacheMatchInfoKey is attached to endpoints by the multimodal data
 	// producer and consumed by scorer/latency plugins that need encoder-cache locality.
 	EncoderCacheMatchInfoKey = "MultiModalEncoderCacheMatchInfoKey"
+	// WeightedEncoderCacheMatchInfoKey is attached by the weighted multimodal
+	// producer. It keeps weighted affinity data separate from the unit-weight path.
+	WeightedEncoderCacheMatchInfoKey = "WeightedMultiModalEncoderCacheMatchInfoKey"
 )
 
 // MatchItem describes one unique multimodal item involved in encoder-cache
