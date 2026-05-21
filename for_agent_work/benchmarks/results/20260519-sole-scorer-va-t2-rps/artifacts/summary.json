@@ -1,0 +1,330 @@
+{
+  "latency": {
+    "only_precise": [
+      16.77058841480149,
+      134.1679269717137,
+      237.62442521554453,
+      365.0770903605223
+    ],
+    "only_weighted": [
+      17.570916239817937,
+      134.04580869118374,
+      201.33303395441934,
+      339.07644241491954
+    ],
+    "only_unweighted": [
+      9.264702641566595,
+      110.53018995495961,
+      224.9103890967369,
+      298.0076001330217
+    ],
+    "latency_cost": [
+      1.2305642170929922,
+      1.4919665583637025,
+      10.522734094946474,
+      40.31308250871694
+    ]
+  },
+  "pod_pct": {
+    "only_precise": {
+      "10": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 23.5714,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 24.2308,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.8791,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 26.3187
+      },
+      "20": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 25.442,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 24.6409,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.5525,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 24.3646
+      },
+      "30": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 25.7934,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 24.0959,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 24.6863,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 25.4244
+      },
+      "40": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 26.0388,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 24.5845,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.0416,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 24.3352
+      }
+    },
+    "only_weighted": {
+      "10": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 25.0,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 27.8571,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 22.5824,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 24.5604
+      },
+      "20": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 23.7269,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 27.7917,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 23.7269,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 24.7545
+      },
+      "30": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 22.8298,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 25.901,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.9636,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 25.3055
+      },
+      "40": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 24.5968,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 26.4568,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.4553,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 23.4912
+      }
+    },
+    "only_unweighted": {
+      "10": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 24.7802,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 26.2637,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 24.3956,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 24.5604
+      },
+      "20": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 24.9943,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 26.1429,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.1321,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 23.7308
+      },
+      "30": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 25.6575,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 25.7984,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.6888,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 22.8554
+      },
+      "40": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 26.3631,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 23.2314,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.1528,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 25.2527
+      }
+    },
+    "latency_cost": {
+      "10": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 26.3736,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 11.3187,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 27.1429,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 35.1648
+      },
+      "20": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 26.6883,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 9.7299,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 26.3882,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 37.1936
+      },
+      "30": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 26.1281,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 7.9228,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.7148,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 40.2342
+      },
+      "40": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 26.0388,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 7.6593,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.2078,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 41.0942
+      }
+    }
+  },
+  "weighted_pct": {
+    "only_precise": {
+      "10": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 23.5714,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 24.2308,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.8791,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 26.3187
+      },
+      "20": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 25.442,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 24.6409,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.5525,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 24.3646
+      },
+      "30": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 25.7934,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 24.0959,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 24.6863,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 25.4244
+      },
+      "40": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 26.0388,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 24.5845,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.0416,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 24.3352
+      }
+    },
+    "only_weighted": {
+      "10": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 25.0,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 27.8571,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 22.5824,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 24.5604
+      },
+      "20": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 23.7269,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 27.7917,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 23.7269,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 24.7545
+      },
+      "30": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 22.8298,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 25.901,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.9636,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 25.3055
+      },
+      "40": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 24.5968,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 26.4568,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.4553,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 23.4912
+      }
+    },
+    "only_unweighted": {
+      "10": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 24.7802,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 26.2637,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 24.3956,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 24.5604
+      },
+      "20": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 24.9943,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 26.1429,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.1321,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 23.7308
+      },
+      "30": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 25.6575,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 25.7984,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.6888,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 22.8554
+      },
+      "40": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 26.3631,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 23.2314,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.1528,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 25.2527
+      }
+    },
+    "latency_cost": {
+      "10": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 26.3736,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 11.3187,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 27.1429,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 35.1648
+      },
+      "20": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 26.6883,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 9.7299,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 26.3882,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 37.1936
+      },
+      "30": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 26.1281,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 7.9228,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.7148,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 40.2342
+      },
+      "40": {
+        "mm-scorer-lc-model-798bbc7bb9-585zx": 26.0388,
+        "mm-scorer-lc-model-798bbc7bb9-dq6fq": 7.6593,
+        "mm-scorer-lc-model-798bbc7bb9-xc694": 25.2078,
+        "mm-scorer-lc-model-798bbc7bb9-xtxqt": 41.0942
+      }
+    }
+  },
+  "coverage": {
+    "only_precise": {
+      "10": {
+        "total_routed": 1820,
+        "benchmark_http_200": 1800,
+        "coverage_ratio": 1.0111
+      },
+      "20": {
+        "total_routed": 3620,
+        "benchmark_http_200": 3600,
+        "coverage_ratio": 1.0056
+      },
+      "30": {
+        "total_routed": 5420,
+        "benchmark_http_200": 5400,
+        "coverage_ratio": 1.0037
+      },
+      "40": {
+        "total_routed": 7220,
+        "benchmark_http_200": 7200,
+        "coverage_ratio": 1.0028
+      }
+    },
+    "only_weighted": {
+      "10": {
+        "total_routed": 1820,
+        "benchmark_http_200": 1800,
+        "coverage_ratio": 1.0111
+      },
+      "20": {
+        "total_routed": 4379,
+        "benchmark_http_200": 3600,
+        "coverage_ratio": 1.2164
+      },
+      "30": {
+        "total_routed": 6382,
+        "benchmark_http_200": 5399,
+        "coverage_ratio": 1.1821
+      },
+      "40": {
+        "total_routed": 7688,
+        "benchmark_http_200": 7200,
+        "coverage_ratio": 1.0678
+      }
+    },
+    "only_unweighted": {
+      "10": {
+        "total_routed": 1820,
+        "benchmark_http_200": 1800,
+        "coverage_ratio": 1.0111
+      },
+      "20": {
+        "total_routed": 4353,
+        "benchmark_http_200": 3599,
+        "coverage_ratio": 1.2095
+      },
+      "30": {
+        "total_routed": 6388,
+        "benchmark_http_200": 5400,
+        "coverage_ratio": 1.183
+      },
+      "40": {
+        "total_routed": 8015,
+        "benchmark_http_200": 7200,
+        "coverage_ratio": 1.1132
+      }
+    },
+    "latency_cost": {
+      "10": {
+        "total_routed": 1820,
+        "benchmark_http_200": 1799,
+        "coverage_ratio": 1.0117
+      },
+      "20": {
+        "total_routed": 3998,
+        "benchmark_http_200": 3600,
+        "coverage_ratio": 1.1106
+      },
+      "30": {
+        "total_routed": 5806,
+        "benchmark_http_200": 5400,
+        "coverage_ratio": 1.0752
+      },
+      "40": {
+        "total_routed": 7220,
+        "benchmark_http_200": 7199,
+        "coverage_ratio": 1.0029
+      }
+    }
+  }
+}

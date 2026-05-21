@@ -1,0 +1,177 @@
+{
+  "profile": "latency_cost",
+  "rps": [
+    "5",
+    "10",
+    "15",
+    "20",
+    "25",
+    "30",
+    "35",
+    "40",
+    "45",
+    "50"
+  ],
+  "latency_s": [
+    1.2637613492541844,
+    1.2836578771803113,
+    1.3557666507473698,
+    1.4818387599786123,
+    1.7097383144166733,
+    11.200988762908512,
+    25.406727712722052,
+    42.80792109327184,
+    56.198441662935565,
+    75.16937512348159
+  ],
+  "avg_ttft_diff_ms": [
+    -183.25836339891305,
+    206.31503070607027,
+    175.14739922849463,
+    74.08052804364641,
+    -114.47714572586702,
+    -1109.4377647522235,
+    -976.4749618885785,
+    -1069.6347861849258,
+    -1024.9156142123254,
+    -1094.8727127696357
+  ],
+  "median_ttft_diff_ms": [
+    -339.95437350000003,
+    -88.47060850000004,
+    -143.97963,
+    -319.796885,
+    -552.22528,
+    -1780.791972,
+    -1693.882306,
+    -1758.4646559999999,
+    -1725.403756,
+    -1775.990882
+  ],
+  "joined_pairs": [
+    920,
+    1878,
+    2976,
+    3620,
+    4527,
+    5509,
+    6444,
+    7284,
+    8162,
+    9307
+  ],
+  "pod_pct": {
+    "5": {
+      "mm-scorer-lc-model-798bbc7bb9-585zx": 24.7826,
+      "mm-scorer-lc-model-798bbc7bb9-dq6fq": 13.6957,
+      "mm-scorer-lc-model-798bbc7bb9-xc694": 27.6087,
+      "mm-scorer-lc-model-798bbc7bb9-xtxqt": 33.913
+    },
+    "10": {
+      "mm-scorer-lc-model-798bbc7bb9-585zx": 25.5059,
+      "mm-scorer-lc-model-798bbc7bb9-dq6fq": 11.8211,
+      "mm-scorer-lc-model-798bbc7bb9-xc694": 27.3695,
+      "mm-scorer-lc-model-798bbc7bb9-xtxqt": 35.3035
+    },
+    "15": {
+      "mm-scorer-lc-model-798bbc7bb9-585zx": 25.7728,
+      "mm-scorer-lc-model-798bbc7bb9-dq6fq": 10.3159,
+      "mm-scorer-lc-model-798bbc7bb9-xc694": 27.621,
+      "mm-scorer-lc-model-798bbc7bb9-xtxqt": 36.2903
+    },
+    "20": {
+      "mm-scorer-lc-model-798bbc7bb9-585zx": 25.6906,
+      "mm-scorer-lc-model-798bbc7bb9-dq6fq": 9.1436,
+      "mm-scorer-lc-model-798bbc7bb9-xc694": 27.5414,
+      "mm-scorer-lc-model-798bbc7bb9-xtxqt": 37.6243
+    },
+    "25": {
+      "mm-scorer-lc-model-798bbc7bb9-585zx": 25.6903,
+      "mm-scorer-lc-model-798bbc7bb9-dq6fq": 7.7314,
+      "mm-scorer-lc-model-798bbc7bb9-xc694": 27.1261,
+      "mm-scorer-lc-model-798bbc7bb9-xtxqt": 39.4522
+    },
+    "30": {
+      "mm-scorer-lc-model-798bbc7bb9-585zx": 25.4311,
+      "mm-scorer-lc-model-798bbc7bb9-dq6fq": 7.642,
+      "mm-scorer-lc-model-798bbc7bb9-xc694": 26.7018,
+      "mm-scorer-lc-model-798bbc7bb9-xtxqt": 40.2251
+    },
+    "35": {
+      "mm-scorer-lc-model-798bbc7bb9-585zx": 25.45,
+      "mm-scorer-lc-model-798bbc7bb9-dq6fq": 8.2557,
+      "mm-scorer-lc-model-798bbc7bb9-xc694": 25.9621,
+      "mm-scorer-lc-model-798bbc7bb9-xtxqt": 40.3321
+    },
+    "40": {
+      "mm-scorer-lc-model-798bbc7bb9-585zx": 26.1258,
+      "mm-scorer-lc-model-798bbc7bb9-dq6fq": 8.1686,
+      "mm-scorer-lc-model-798bbc7bb9-xc694": 25.7414,
+      "mm-scorer-lc-model-798bbc7bb9-xtxqt": 39.9643
+    },
+    "45": {
+      "mm-scorer-lc-model-798bbc7bb9-585zx": 25.7045,
+      "mm-scorer-lc-model-798bbc7bb9-dq6fq": 8.1843,
+      "mm-scorer-lc-model-798bbc7bb9-xc694": 25.4962,
+      "mm-scorer-lc-model-798bbc7bb9-xtxqt": 40.615
+    },
+    "50": {
+      "mm-scorer-lc-model-798bbc7bb9-585zx": 26.0342,
+      "mm-scorer-lc-model-798bbc7bb9-dq6fq": 8.3808,
+      "mm-scorer-lc-model-798bbc7bb9-xc694": 25.0457,
+      "mm-scorer-lc-model-798bbc7bb9-xtxqt": 40.5394
+    }
+  },
+  "coverage": {
+    "5": {
+      "total_routed": 920,
+      "benchmark_http_200": 900,
+      "coverage_ratio": 1.0222
+    },
+    "10": {
+      "total_routed": 1878,
+      "benchmark_http_200": 1800,
+      "coverage_ratio": 1.0433
+    },
+    "15": {
+      "total_routed": 2976,
+      "benchmark_http_200": 2700,
+      "coverage_ratio": 1.1022
+    },
+    "20": {
+      "total_routed": 3620,
+      "benchmark_http_200": 3600,
+      "coverage_ratio": 1.0056
+    },
+    "25": {
+      "total_routed": 4527,
+      "benchmark_http_200": 4500,
+      "coverage_ratio": 1.006
+    },
+    "30": {
+      "total_routed": 5509,
+      "benchmark_http_200": 5400,
+      "coverage_ratio": 1.0202
+    },
+    "35": {
+      "total_routed": 6444,
+      "benchmark_http_200": 6300,
+      "coverage_ratio": 1.0229
+    },
+    "40": {
+      "total_routed": 7284,
+      "benchmark_http_200": 7200,
+      "coverage_ratio": 1.0117
+    },
+    "45": {
+      "total_routed": 8162,
+      "benchmark_http_200": 8100,
+      "coverage_ratio": 1.0077
+    },
+    "50": {
+      "total_routed": 9307,
+      "benchmark_http_200": 8997,
+      "coverage_ratio": 1.0345
+    }
+  }
+}
