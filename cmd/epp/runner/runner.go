@@ -141,6 +141,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/tokenload"
 	topologyaffinityscorer "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/topologyaffinity"
 	testfilter "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/test/filter"
+	sessionstateplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/sessionstate"
 	"github.com/llm-d/llm-d-router/pkg/epp/handlers"
 	"github.com/llm-d/llm-d-router/pkg/epp/metrics"
 	"github.com/llm-d/llm-d-router/pkg/epp/metrics/collectors"
@@ -556,6 +557,10 @@ func setupDatastore(ctx context.Context, epFactory datalayer.EndpointFactory,
 
 // registerInTreePlugins registers the factory functions of all known plugins
 func (r *Runner) registerInTreePlugins() {
+	// shared state providers
+	// Alpha
+	fwkplugin.Register(sessionstateplugin.PluginType, fwkplugin.StabilityAlpha, sessionstateplugin.Factory)
+
 	// request control screeners
 	// Alpha
 	fwkplugin.Register(disaggregatedsetrollout.PluginType, fwkplugin.StabilityAlpha, disaggregatedsetrollout.Factory)
