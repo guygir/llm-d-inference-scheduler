@@ -14,6 +14,7 @@ plugins:
       nodeCapacity: 100000
       aliasCapacity: 100000
       residencyCapacity: 100000
+      endpointCapacity: 100000
       maxTipsPerEndpoint: 32
       maxAncestryDepth: 8192
       maxCoverageSteps: 1000000
@@ -21,8 +22,9 @@ plugins:
       aliasTTL: 1h
       estimateTTL: 2m
       cleanupInterval: 1m
-      endpointReconcileInterval: 2m
 ```
 
 Later session-aware producers refer to the configured name with `storePluginRef`. The provider stores
 no request payloads and exposes only aggregate cardinalities through metrics and debug state.
+Endpoint notification events are authoritative for registration, replacement, and deletion.
+`nodeTTL` must be at least as long as `aliasTTL` and `estimateTTL`.

@@ -55,10 +55,11 @@ func (c *storeCollector) Describe(descriptions chan<- *prometheus.Desc) {
 func (c *storeCollector) Collect(metrics chan<- prometheus.Metric) {
 	stats := c.provider.Stats()
 	for kind, value := range map[string]int{
-		"node":      stats.Nodes,
-		"alias":     stats.Aliases,
-		"residency": stats.Residencies,
-		"endpoint":  stats.Endpoints,
+		"node":                stats.Nodes,
+		"alias":               stats.Aliases,
+		"residency":           stats.Residencies,
+		"residency_endpoint":  stats.ResidencyEndpoints,
+		"registered_endpoint": c.provider.registrationCount(),
 	} {
 		metrics <- prometheus.MustNewConstMetric(
 			c.entriesDesc,

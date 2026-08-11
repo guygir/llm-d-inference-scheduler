@@ -17,30 +17,35 @@ limitations under the License.
 package sessionstate
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
 	storeapi "github.com/llm-d/llm-d-router/pkg/sessionstate"
 )
 
-const defaultEndpointReconcileInterval = 2 * time.Minute
+const (
+	defaultEndpointCapacity = 100_000
+	maxEndpointCapacity     = 1_000_000
+)
 
 type config struct {
-	NodeCapacity              *int   `json:"nodeCapacity,omitempty"`
-	AliasCapacity             *int   `json:"aliasCapacity,omitempty"`
-	ResidencyCapacity         *int   `json:"residencyCapacity,omitempty"`
-	MaxTipsPerEndpoint        *int   `json:"maxTipsPerEndpoint,omitempty"`
-	MaxAncestryDepth          *int   `json:"maxAncestryDepth,omitempty"`
-	MaxCoverageSteps          *int   `json:"maxCoverageSteps,omitempty"`
-	NodeTTL                   string `json:"nodeTTL,omitempty"`
-	AliasTTL                  string `json:"aliasTTL,omitempty"`
-	EstimateTTL               string `json:"estimateTTL,omitempty"`
-	CleanupInterval           string `json:"cleanupInterval,omitempty"`
-	EndpointReconcileInterval string `json:"endpointReconcileInterval,omitempty"`
+	NodeCapacity       *int   `json:"nodeCapacity,omitempty"`
+	AliasCapacity      *int   `json:"aliasCapacity,omitempty"`
+	ResidencyCapacity  *int   `json:"residencyCapacity,omitempty"`
+	EndpointCapacity   *int   `json:"endpointCapacity,omitempty"`
+	MaxTipsPerEndpoint *int   `json:"maxTipsPerEndpoint,omitempty"`
+	MaxAncestryDepth   *int   `json:"maxAncestryDepth,omitempty"`
+	MaxCoverageSteps   *int   `json:"maxCoverageSteps,omitempty"`
+	NodeTTL            string `json:"nodeTTL,omitempty"`
+	AliasTTL           string `json:"aliasTTL,omitempty"`
+	EstimateTTL        string `json:"estimateTTL,omitempty"`
+	CleanupInterval    string `json:"cleanupInterval,omitempty"`
 }
 
-func (c config) storeConfig() (storeapi.Config, time.Duration, error) {
+func (c config) values() (storeapi.Config, int, error) {
 	result := storeapi.DefaultConfig()
+	endpointCapacity := defaultEndpointCapacity
 	if c.NodeCapacity != nil {
 		result.NodeCapacity = *c.NodeCapacity
 	}
@@ -49,6 +54,9 @@ func (c config) storeConfig() (storeapi.Config, time.Duration, error) {
 	}
 	if c.ResidencyCapacity != nil {
 		result.ResidencyCapacity = *c.ResidencyCapacity
+	}
+	if c.EndpointCapacity != nil {
+		endpointCapacity = *c.EndpointCapacity
 	}
 	if c.MaxTipsPerEndpoint != nil {
 		result.MaxTipsPerEndpoint = *c.MaxTipsPerEndpoint
@@ -75,18 +83,16 @@ func (c config) storeConfig() (storeapi.Config, time.Duration, error) {
 	); err != nil {
 		return storeapi.Config{}, 0, err
 	}
-	reconcileInterval, err := parseDuration(
-		"endpointReconcileInterval",
-		c.EndpointReconcileInterval,
-		defaultEndpointReconcileInterval,
-	)
-	if err != nil {
-		return storeapi.Config{}, 0, err
+	if endpointCapacity <= 0 {
+		return storeapi.Config{}, 0, errors.New("endpointCapacity must be positive")
+	}
+	if endpointCapacity > maxEndpointCapacity {
+		return storeapi.Config{}, 0, errors.New("endpointCapacity exceeds safety limit")
 	}
 	if err := result.Validate(); err != nil {
 		return storeapi.Config{}, 0, err
 	}
-	return result, reconcileInterval, nil
+	return result, endpointCapacity, nil
 }
 
 func parseDuration(field, value string, fallback time.Duration) (time.Duration, error) {

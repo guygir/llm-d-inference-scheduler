@@ -95,28 +95,18 @@ type Node struct {
 	CumulativeExtent Extent
 }
 
-// EvidenceSource describes how a residency fact was learned.
-type EvidenceSource string
-
-const (
-	EvidenceSourceEstimate  EvidenceSource = "estimated"
-	EvidenceSourceConfirmed EvidenceSource = "confirmed"
-)
-
 // EndpointGeneration identifies one lifecycle generation of a named endpoint.
 type EndpointGeneration uint64
 
-// Residency describes one endpoint/tier observation for a logical node.
+// Residency describes one short-lived endpoint/tier estimate for a logical node.
 type Residency struct {
-	Node           NodeKey
-	Endpoint       string
-	Generation     EndpointGeneration
-	Tier           string
-	Extent         Extent
-	Source         EvidenceSource
-	ObservedAt     time.Time
-	ExpiresAt      time.Time
-	PublisherEpoch string
+	Node       NodeKey
+	Endpoint   string
+	Generation EndpointGeneration
+	Tier       string
+	Extent     Extent
+	ObservedAt time.Time
+	ExpiresAt  time.Time
 }
 
 // EndpointCoverage is the deepest compatible extent found for one endpoint and tier.
@@ -127,15 +117,14 @@ type EndpointCoverage struct {
 	Covered     Extent
 	Requested   Extent
 	Fraction    float64
-	Source      EvidenceSource
 }
 
 // Stats reports bounded store cardinalities without exposing identifiers.
 type Stats struct {
-	Nodes       int `json:"nodes"`
-	Aliases     int `json:"aliases"`
-	Residencies int `json:"residencies"`
-	Endpoints   int `json:"endpoints"`
+	Nodes              int `json:"nodes"`
+	Aliases            int `json:"aliases"`
+	Residencies        int `json:"residencies"`
+	ResidencyEndpoints int `json:"residencyEndpoints"`
 }
 
 // Store is the shared logical-state contract. Implementations must be safe for
@@ -147,7 +136,6 @@ type Store interface {
 	RecordEstimate(ctx context.Context, residency Residency) error
 	Coverage(ctx context.Context, tip NodeKey, requested Extent, candidates []string) ([]EndpointCoverage, error)
 	PurgeEndpoint(ctx context.Context, endpoint string) error
-	Expire(now time.Time)
 	Stats() Stats
 }
 
@@ -157,7 +145,6 @@ var (
 	ErrNodeNotFound        = errors.New("session-state node not found")
 	ErrNodeConflict        = errors.New("session-state node conflicts with existing immutable node")
 	ErrExtentUnit          = errors.New("session-state extent units do not match")
-	ErrAncestryCycle       = errors.New("session-state ancestry cycle")
 	ErrInvalidAlias        = errors.New("invalid session-state alias")
 	ErrInvalidNode         = errors.New("invalid session-state node")
 	ErrInvalidRecord       = errors.New("invalid session-state residency")

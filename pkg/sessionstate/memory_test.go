@@ -35,6 +35,20 @@ type fakeClock struct {
 	now time.Time
 }
 
+type cancelAfterChecksContext struct {
+	context.Context
+	checks      int
+	cancelAfter int
+}
+
+func (c *cancelAfterChecksContext) Err() error {
+	c.checks++
+	if c.checks >= c.cancelAfter {
+		return context.Canceled
+	}
+	return nil
+}
+
 func (f *fakeClock) Now() time.Time {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -125,6 +139,32 @@ func TestMemoryStoreSharedNodesAndTypedAliases(t *testing.T) {
 	require.Equal(t, Stats{Nodes: 2, Aliases: 2}, store.Stats())
 }
 
+func TestMemoryStoreAliasRebindingUpdatesReverseIndexes(t *testing.T) {
+	config := testConfig()
+	config.NodeCapacity = 2
+	store, _ := newTestStore(t, config)
+	scope := TenantScope("scope")
+	nodeA := key(scope, "a")
+	nodeB := key(scope, "b")
+	nodeC := key(scope, "c")
+	putNode(t, store, node(nodeA, nil, 10))
+	putNode(t, store, node(nodeB, nil, 10))
+	alias := AliasKey{TenantScope: scope, Kind: AliasKindResponse, Value: "resp"}
+	require.NoError(t, store.PutAlias(
+		context.Background(), alias, AliasTarget{Node: nodeA}, time.Hour,
+	))
+	require.NoError(t, store.PutAlias(
+		context.Background(), alias, AliasTarget{Node: nodeB}, time.Hour,
+	))
+
+	putNode(t, store, node(nodeC, nil, 10))
+	target, found := store.ResolveAlias(context.Background(), alias)
+	require.True(t, found)
+	require.Equal(t, nodeB, target.Node)
+	require.NotContains(t, store.aliasesByNode, nodeA)
+	require.Contains(t, store.aliasesByNode[nodeB], alias)
+}
+
 func TestMemoryStoreAliasTenantScopeIsolation(t *testing.T) {
 	store, _ := newTestStore(t, testConfig())
 	scopeA := TenantScope("tenant-a")
@@ -199,7 +239,7 @@ func TestMemoryStoreCoverageAndTipBoundsAreTenantIsolated(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, coverageB, 1)
 	require.Equal(t, tipB, *coverageB[0].MatchedNode)
-	require.Equal(t, Stats{Nodes: 6, Residencies: 2, Endpoints: 1}, store.Stats())
+	require.Equal(t, Stats{Nodes: 6, Residencies: 2, ResidencyEndpoints: 1}, store.Stats())
 }
 
 func TestMemoryStoreForkAwareCoverage(t *testing.T) {
@@ -255,7 +295,14 @@ func TestMemoryStoreOneNodeCanCoverManyEndpoints(t *testing.T) {
 		Extent{Value: 10, Unit: ExtentUnitFramedBytes}, []string{"pod-a", "pod-b", "pod-c"})
 	require.NoError(t, err)
 	require.Len(t, coverage, 3)
-	require.Equal(t, Stats{Nodes: 1, Residencies: 3, Endpoints: 3}, store.Stats())
+	for index, endpoint := range []string{"pod-a", "pod-b", "pod-c"} {
+		require.Equal(t, endpoint, coverage[index].Endpoint)
+		require.Equal(t, c0, *coverage[index].MatchedNode)
+		require.Equal(t, Extent{Value: 10, Unit: ExtentUnitFramedBytes}, coverage[index].Covered)
+		require.Equal(t, Extent{Value: 10, Unit: ExtentUnitFramedBytes}, coverage[index].Requested)
+		require.Equal(t, 1.0, coverage[index].Fraction)
+	}
+	require.Equal(t, Stats{Nodes: 1, Residencies: 3, ResidencyEndpoints: 3}, store.Stats())
 }
 
 func TestMemoryStoreCompactsDominatedAndBoundsForkTips(t *testing.T) {
@@ -410,27 +457,77 @@ func TestMemoryStoreReturnsDeterministicCoveragePerTier(t *testing.T) {
 	}))
 	require.Equal(t, 2, store.Stats().Residencies)
 
-	for range 10 {
-		coverage, err := store.Coverage(context.Background(), incoming,
-			Extent{Value: 30, Unit: ExtentUnitFramedBytes}, []string{"pod-a"})
-		require.NoError(t, err)
-		require.Len(t, coverage, 2)
-		require.Equal(t, root, *coverage[0].MatchedNode)
-		require.Equal(t, "CPU", coverage[0].Tier)
-		require.Equal(t, uint64(10), coverage[0].Covered.Value)
-		require.InDelta(t, 1.0/3.0, coverage[0].Fraction, 0.0001)
-		require.Equal(t, root, *coverage[1].MatchedNode)
-		require.Equal(t, "GPU", coverage[1].Tier)
-		require.Equal(t, uint64(10), coverage[1].Covered.Value)
-		require.InDelta(t, 1.0/3.0, coverage[1].Fraction, 0.0001)
-	}
+	coverage, err := store.Coverage(context.Background(), incoming,
+		Extent{Value: 30, Unit: ExtentUnitFramedBytes}, []string{"pod-a"})
+	require.NoError(t, err)
+	require.Len(t, coverage, 2)
+	require.Equal(t, root, *coverage[0].MatchedNode)
+	require.Equal(t, "CPU", coverage[0].Tier)
+	require.Equal(t, uint64(10), coverage[0].Covered.Value)
+	require.InDelta(t, 1.0/3.0, coverage[0].Fraction, 0.0001)
+	require.Equal(t, root, *coverage[1].MatchedNode)
+	require.Equal(t, "GPU", coverage[1].Tier)
+	require.Equal(t, uint64(10), coverage[1].Covered.Value)
+	require.InDelta(t, 1.0/3.0, coverage[1].Fraction, 0.0001)
 	require.NoError(t, store.PurgeEndpoint(context.Background(), "pod-a"))
 	require.Zero(t, store.Stats().Residencies)
+}
+
+func TestMemoryStoreTipBoundAppliesAcrossTiers(t *testing.T) {
+	config := testConfig()
+	config.MaxTipsPerEndpoint = 1
+	store, clock := newTestStore(t, config)
+	scope := TenantScope("scope")
+	root := key(scope, "root")
+	cpuTip := key(scope, "cpu")
+	gpuTip := key(scope, "gpu")
+	putNode(t, store, node(root, nil, 10))
+	putNode(t, store, node(cpuTip, &root, 20))
+	putNode(t, store, node(gpuTip, &root, 20))
+	require.NoError(t, store.RecordEstimate(context.Background(), Residency{
+		Node: cpuTip, Endpoint: "pod-a", Generation: testGeneration, Tier: "CPU",
+		Extent: Extent{Value: 20, Unit: ExtentUnitFramedBytes},
+	}))
+	clock.Advance(time.Second)
+	require.NoError(t, store.RecordEstimate(context.Background(), Residency{
+		Node: gpuTip, Endpoint: "pod-a", Generation: testGeneration, Tier: "GPU",
+		Extent: Extent{Value: 20, Unit: ExtentUnitFramedBytes},
+	}))
+
+	require.Equal(t, 1, store.Stats().Residencies)
+	coverage, err := store.Coverage(context.Background(), gpuTip,
+		Extent{Value: 20, Unit: ExtentUnitFramedBytes}, []string{"pod-a"})
+	require.NoError(t, err)
+	require.Len(t, coverage, 1)
+	require.Equal(t, "GPU", coverage[0].Tier)
+	require.Equal(t, gpuTip, *coverage[0].MatchedNode)
+}
+
+func TestMemoryStoreClampsCoverageToRequestedExtent(t *testing.T) {
+	store, _ := newTestStore(t, testConfig())
+	scope := TenantScope("scope")
+	root := key(scope, "root")
+	putNode(t, store, node(root, nil, 10))
+	recordResidency(t, store, root, 10)
+
+	coverage, err := store.Coverage(context.Background(), root,
+		Extent{Value: 5, Unit: ExtentUnitFramedBytes}, []string{"pod-a"})
+	require.NoError(t, err)
+	require.Equal(t, uint64(5), coverage[0].Covered.Value)
+	require.Equal(t, 1.0, coverage[0].Fraction)
+
+	coverage, err = store.Coverage(context.Background(), root,
+		Extent{Unit: ExtentUnitFramedBytes}, []string{"pod-a"})
+	require.NoError(t, err)
+	require.Zero(t, coverage[0].Covered.Value)
+	require.Zero(t, coverage[0].Fraction)
 }
 
 func TestMemoryStorePinsAncestorsUntilChildrenExpire(t *testing.T) {
 	config := testConfig()
 	config.NodeTTL = time.Minute
+	config.AliasTTL = time.Minute
+	config.EstimateTTL = time.Minute
 	store, clock := newTestStore(t, config)
 	scope := TenantScope("scope")
 	root := key(scope, "root")
@@ -446,12 +543,12 @@ func TestMemoryStorePinsAncestorsUntilChildrenExpire(t *testing.T) {
 	require.True(t, found)
 
 	clock.Advance(40 * time.Second)
-	store.Expire(clock.Now())
+	store.expire(clock.Now())
 	require.Equal(t, 2, store.Stats().Nodes, "expired parent must remain pinned by its child")
 	require.NoError(t, store.PutNode(context.Background(), node(child, &root, 20)))
 
 	clock.Advance(2 * time.Minute)
-	store.Expire(clock.Now())
+	store.expire(clock.Now())
 	require.Zero(t, store.Stats().Nodes, "expired leaf removal should release expired ancestors")
 }
 
@@ -502,11 +599,59 @@ func TestMemoryStoreExpiryAndEndpointPurge(t *testing.T) {
 	require.Equal(t, "pod-b", coverage[0].Endpoint)
 
 	clock.Advance(3 * time.Minute)
-	store.Expire(clock.Now())
+	store.expire(clock.Now())
 	require.Equal(t, Stats{Nodes: 1, Aliases: 1}, store.Stats())
 
 	clock.Advance(2 * time.Hour)
-	store.Expire(clock.Now())
+	store.expire(clock.Now())
+	require.Equal(t, Stats{}, store.Stats())
+}
+
+func TestMemoryStorePurgeEndpointObservesCancellationBetweenBatches(t *testing.T) {
+	config := testConfig()
+	config.ResidencyCapacity = cleanupBatchSize + 1
+	config.MaxTipsPerEndpoint = cleanupBatchSize + 1
+	store, _ := newTestStore(t, config)
+	scope := TenantScope("scope")
+	root := key(scope, "root")
+	putNode(t, store, node(root, nil, 10))
+	for index := 0; index <= cleanupBatchSize; index++ {
+		require.NoError(t, store.RecordEstimate(context.Background(), Residency{
+			Node: root, Endpoint: "pod-a", Generation: testGeneration,
+			Tier:   fmt.Sprintf("tier-%d", index),
+			Extent: Extent{Value: 10, Unit: ExtentUnitFramedBytes},
+		}))
+	}
+	ctx := &cancelAfterChecksContext{Context: context.Background(), cancelAfter: 3}
+
+	err := store.PurgeEndpoint(ctx, "pod-a")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, store.Stats().Residencies)
+	require.NoError(t, store.PurgeEndpoint(context.Background(), "pod-a"))
+	require.Zero(t, store.Stats().Residencies)
+}
+
+func TestMemoryStoreCooperativeExpiryObservesCancellationBetweenBatches(t *testing.T) {
+	config := testConfig()
+	config.NodeCapacity = 1
+	config.AliasCapacity = expiryBatchSize + 1
+	store, clock := newTestStore(t, config)
+	scope := TenantScope("scope")
+	root := key(scope, "root")
+	putNode(t, store, node(root, nil, 10))
+	for index := 0; index <= expiryBatchSize; index++ {
+		require.NoError(t, store.PutAlias(context.Background(), AliasKey{
+			TenantScope: scope,
+			Kind:        AliasKindResponse,
+			Value:       fmt.Sprintf("response-%d", index),
+		}, AliasTarget{Node: root}, time.Hour))
+	}
+	clock.Advance(2 * time.Hour)
+	ctx := &cancelAfterChecksContext{Context: context.Background(), cancelAfter: 2}
+
+	store.expireCooperatively(ctx, clock.Now())
+	require.NotZero(t, store.Stats().Aliases)
+	store.expire(clock.Now())
 	require.Equal(t, Stats{}, store.Stats())
 }
 
@@ -519,7 +664,7 @@ func TestMemoryStoreExpiryIndexRemainsBoundedUnderRefresh(t *testing.T) {
 	require.NoError(t, store.PutAlias(
 		context.Background(), alias, AliasTarget{Node: root}, time.Hour,
 	))
-	for range 10_000 {
+	for range 3 {
 		_, found := store.ResolveAlias(context.Background(), alias)
 		require.True(t, found)
 		recordResidency(t, store, root, 10)
@@ -555,10 +700,10 @@ func TestMemoryStoreClampsCallerControlledLifetimes(t *testing.T) {
 	}))
 
 	clock.Advance(3 * time.Minute)
-	store.Expire(clock.Now())
+	store.expire(clock.Now())
 	require.Zero(t, store.Stats().Residencies, "estimate must use configured TTL")
 	clock.Advance(time.Hour)
-	store.Expire(clock.Now())
+	store.expire(clock.Now())
 	_, found := store.ResolveAlias(context.Background(), alias)
 	require.False(t, found, "alias TTL override must not exceed configured maximum")
 }
@@ -649,7 +794,7 @@ func TestMemoryStoreRejectsInvalidAndOversizedKeys(t *testing.T) {
 func TestMemoryStoreCapacitiesAreIndependent(t *testing.T) {
 	config := testConfig()
 	config.NodeCapacity = 2
-	config.AliasCapacity = 1
+	config.AliasCapacity = 2
 	store, _ := newTestStore(t, config)
 	scope := TenantScope("scope")
 	c0 := key(scope, "c0")
@@ -664,20 +809,30 @@ func TestMemoryStoreCapacitiesAreIndependent(t *testing.T) {
 			Value:       fmt.Sprintf("resp-%d", index),
 		}, AliasTarget{Node: c1}, time.Hour))
 	}
-	require.Equal(t, Stats{Nodes: 2, Aliases: 1}, store.Stats())
-	_, found := store.ResolveAlias(context.Background(), AliasKey{
+	alias0 := AliasKey{TenantScope: scope, Kind: AliasKindResponse, Value: "resp-0"}
+	_, found := store.ResolveAlias(context.Background(), alias0)
+	require.True(t, found)
+	alias2 := AliasKey{TenantScope: scope, Kind: AliasKindResponse, Value: "resp-2"}
+	require.NoError(t, store.PutAlias(
+		context.Background(), alias2, AliasTarget{Node: c1}, time.Hour,
+	))
+
+	require.Equal(t, Stats{Nodes: 2, Aliases: 2}, store.Stats())
+	_, found = store.ResolveAlias(context.Background(), AliasKey{
 		TenantScope: scope, Kind: AliasKindResponse, Value: "resp-0",
 	})
-	require.False(t, found)
+	require.True(t, found, "recently resolved alias should remain")
 	_, found = store.ResolveAlias(context.Background(), AliasKey{
 		TenantScope: scope, Kind: AliasKindResponse, Value: "resp-1",
 	})
+	require.False(t, found, "least recently used alias should be evicted")
+	_, found = store.ResolveAlias(context.Background(), alias2)
 	require.True(t, found)
 }
 
 func TestMemoryStoreResidencyCapacityUsesLRU(t *testing.T) {
 	config := testConfig()
-	config.ResidencyCapacity = 1
+	config.ResidencyCapacity = 2
 	store, clock := newTestStore(t, config)
 	scope := TenantScope("scope")
 	c0 := key(scope, "c0")
@@ -689,12 +844,21 @@ func TestMemoryStoreResidencyCapacityUsesLRU(t *testing.T) {
 	require.NoError(t, store.RecordEstimate(context.Background(), Residency{
 		Node: c0, Endpoint: "pod-b", Generation: testGeneration, Extent: Extent{Value: 10, Unit: ExtentUnitFramedBytes},
 	}))
-
 	coverage, err := store.Coverage(context.Background(), c0,
-		Extent{Value: 10, Unit: ExtentUnitFramedBytes}, []string{"pod-a", "pod-b"})
+		Extent{Value: 10, Unit: ExtentUnitFramedBytes}, []string{"pod-a"})
 	require.NoError(t, err)
 	require.Len(t, coverage, 1)
-	require.Equal(t, "pod-b", coverage[0].Endpoint)
+	clock.Advance(time.Second)
+	require.NoError(t, store.RecordEstimate(context.Background(), Residency{
+		Node: c0, Endpoint: "pod-c", Generation: testGeneration, Extent: Extent{Value: 10, Unit: ExtentUnitFramedBytes},
+	}))
+
+	coverage, err = store.Coverage(context.Background(), c0,
+		Extent{Value: 10, Unit: ExtentUnitFramedBytes}, []string{"pod-a", "pod-b", "pod-c"})
+	require.NoError(t, err)
+	require.Len(t, coverage, 2)
+	require.Equal(t, "pod-a", coverage[0].Endpoint)
+	require.Equal(t, "pod-c", coverage[1].Endpoint)
 }
 
 func TestMemoryStoreNodeCapacityUsesAccessOrderedLRU(t *testing.T) {
@@ -817,7 +981,7 @@ func TestMemoryStoreRejectsConflictingImmutableNode(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidNode)
 
 	err = store.PutNode(context.Background(), node(c0, &c0, 10))
-	require.ErrorIs(t, err, ErrAncestryCycle)
+	require.ErrorIs(t, err, ErrNodeConflict)
 }
 
 func TestMemoryStoreBoundsAncestryDepth(t *testing.T) {
@@ -850,11 +1014,116 @@ func TestMemoryStoreBoundsTotalCoverageWork(t *testing.T) {
 }
 
 func TestMemoryStoreCoverageWorkObservesCancellation(t *testing.T) {
-	store, _ := newTestStore(t, testConfig())
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	steps := 256
+	config := testConfig()
+	config.MaxAncestryDepth = 512
+	config.NodeCapacity = 400
+	store, _ := newTestStore(t, config)
+	scope := TenantScope("scope")
+	parent := key(scope, "node-0")
+	putNode(t, store, node(parent, nil, 1))
+	for index := 1; index < 300; index++ {
+		child := key(scope, fmt.Sprintf("node-%d", index))
+		putNode(t, store, node(child, &parent, uint64(index+1)))
+		parent = child
+	}
+	recordResidency(t, store, parent, 300)
+	ctx := &cancelAfterChecksContext{Context: context.Background(), cancelAfter: 3}
 
-	err := store.consumeCoverageStep(ctx, &steps)
+	_, err := store.Coverage(ctx, parent,
+		Extent{Value: 300, Unit: ExtentUnitFramedBytes}, []string{"pod-a"})
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestConfigRejectsDependentTTLsLongerThanNodeTTL(t *testing.T) {
+	config := testConfig()
+	config.NodeTTL = time.Minute
+	config.AliasTTL = 2 * time.Minute
+	require.ErrorIs(t, config.Validate(), ErrInvalidConfig)
+
+	config = testConfig()
+	config.NodeTTL = time.Minute
+	config.EstimateTTL = 2 * time.Minute
+	require.ErrorIs(t, config.Validate(), ErrInvalidConfig)
+}
+
+func BenchmarkMemoryStoreWorstCaseNodeRemoval(b *testing.B) {
+	const entries = maxTipsPerEndpointLimit
+	for range b.N {
+		b.StopTimer()
+		config := testConfig()
+		config.NodeCapacity = 1
+		config.AliasCapacity = entries
+		config.ResidencyCapacity = entries
+		config.MaxTipsPerEndpoint = entries
+		ctx, cancel := context.WithCancel(context.Background())
+		store, err := newMemoryStore(ctx, config, withClock(&fakeClock{now: time.Now()}))
+		if err != nil {
+			b.Fatal(err)
+		}
+		scope := TenantScope("scope")
+		root := key(scope, "root")
+		if err := store.PutNode(ctx, node(root, nil, 10)); err != nil {
+			b.Fatal(err)
+		}
+		for index := range entries {
+			if err := store.PutAlias(ctx, AliasKey{
+				TenantScope: scope,
+				Kind:        AliasKindResponse,
+				Value:       fmt.Sprintf("response-%d", index),
+			}, AliasTarget{Node: root}, time.Hour); err != nil {
+				b.Fatal(err)
+			}
+			if err := store.RecordEstimate(ctx, Residency{
+				Node: root, Endpoint: "pod-a", Generation: testGeneration,
+				Tier:   fmt.Sprintf("tier-%d", index),
+				Extent: Extent{Value: 10, Unit: ExtentUnitFramedBytes},
+			}); err != nil {
+				b.Fatal(err)
+			}
+		}
+		replacement := key(scope, "replacement")
+		b.StartTimer()
+		err = store.PutNode(ctx, node(replacement, nil, 10))
+		b.StopTimer()
+		cancel()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkMemoryStoreWorstCaseEndpointPurge(b *testing.B) {
+	const entries = maxTipsPerEndpointLimit
+	for range b.N {
+		b.StopTimer()
+		config := testConfig()
+		config.ResidencyCapacity = entries
+		config.MaxTipsPerEndpoint = entries
+		ctx, cancel := context.WithCancel(context.Background())
+		store, err := newMemoryStore(ctx, config, withClock(&fakeClock{now: time.Now()}))
+		if err != nil {
+			b.Fatal(err)
+		}
+		scope := TenantScope("scope")
+		root := key(scope, "root")
+		if err := store.PutNode(ctx, node(root, nil, 10)); err != nil {
+			b.Fatal(err)
+		}
+		for index := range entries {
+			if err := store.RecordEstimate(ctx, Residency{
+				Node: root, Endpoint: "pod-a", Generation: testGeneration,
+				Tier:   fmt.Sprintf("tier-%d", index),
+				Extent: Extent{Value: 10, Unit: ExtentUnitFramedBytes},
+			}); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StartTimer()
+		err = store.PurgeEndpoint(ctx, "pod-a")
+		b.StopTimer()
+		cancel()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
 }

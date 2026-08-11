@@ -11,17 +11,18 @@ payloads and does not claim engine KV truth.
   selected.
 - Coverage examines only explicit candidate endpoints and returns typed covered/requested extents
   separately for each endpoint/tier.
-- String coordinates, endpoint registrations, candidate count, ancestry depth, and total coverage
-  work are independently bounded.
-- Maximal-tip compaction removes an ancestor only when a descendant carries at least its extent with
-  equal-or-stronger evidence.
+- Store string coordinates, candidate count, ancestry depth, and total coverage work are bounded;
+  the provider independently bounds endpoint registrations.
+- Maximal-tip compaction removes an ancestor only when a descendant estimate carries at least its
+  extent.
 - Missing ancestry, stale endpoint generations, incompatible units, or exhausted work budgets fail
   cold; callers must publish zero affinity rather than infer coverage.
 
-The default bounds are independent 100,000-entry node, alias, and residency budgets, 32 tips per
-endpoint/scope across tiers, 8,192 nodes per ancestry, and 1,000,000 traversal steps per coverage
-call. Nodes are removed leaf-first so retained ancestry never dangles. Expiry uses an indexed heap
-and cooperative cleanup batches.
+The default bounds are independent 100,000-entry node, alias, residency, and endpoint-registration
+budgets, 32 tips per endpoint/scope across tiers, 8,192 nodes per ancestry, and 1,000,000 traversal
+steps per coverage call. Configuration also enforces safety ceilings. Nodes are removed leaf-first
+so retained ancestry never dangles. Expiry and large cleanup operations use bounded cooperative
+batches. Node TTL must be at least as long as alias and estimate TTL.
 
 Every residency row has store-assigned `ObservedAt` and `ExpiresAt` timestamps. Expiry removes that
 one node/endpoint/tier estimate; it does not unregister the endpoint generation. Endpoint lifecycle

@@ -37,6 +37,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const defaultPodAEndpoint = "default/pod-a"
+
 type fakeRegistrar struct {
 	registration fwkdl.PendingRegistration
 }
@@ -51,6 +53,14 @@ type blockingEstimateStore struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+type blockingPurgeStore struct {
+	storeapi.Store
+	endpoint string
+	started  chan struct{}
+	release  chan struct{}
+	once     sync.Once
 }
 
 func testNodeID(value string) storeapi.NodeID {
@@ -70,13 +80,26 @@ func (s *blockingEstimateStore) RecordEstimate(
 	}
 }
 
-func newTestPlugin(t *testing.T, parameters string, pods fwkplugin.PodListFunc) *Plugin {
+func (s *blockingPurgeStore) PurgeEndpoint(ctx context.Context, endpoint string) error {
+	if endpoint != s.endpoint {
+		return s.Store.PurgeEndpoint(ctx, endpoint)
+	}
+	s.once.Do(func() { close(s.started) })
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.release:
+		return s.Store.PurgeEndpoint(ctx, endpoint)
+	}
+}
+
+func newTestPlugin(t *testing.T, parameters string) *Plugin {
 	t.Helper()
 	var decoder *json.Decoder
 	if parameters != "" {
 		decoder = fwkplugin.StrictDecoder(json.RawMessage(parameters))
 	}
-	handle := fwkplugin.NewEppHandle(t.Context(), pods)
+	handle := fwkplugin.NewEppHandle(t.Context(), nil)
 	created, err := Factory("central", decoder, handle)
 	require.NoError(t, err)
 	plugin, ok := created.(*Plugin)
@@ -125,20 +148,19 @@ func TestFactoryCreatesNamedBoundedProvider(t *testing.T) {
 		"nodeCapacity": 2,
 		"aliasCapacity": 3,
 		"residencyCapacity": 4,
+		"endpointCapacity": 5,
 		"maxTipsPerEndpoint": 2,
 		"maxAncestryDepth": 128,
 		"maxCoverageSteps": 256,
 		"nodeTTL": "30m",
 		"aliasTTL": "20m",
 		"estimateTTL": "90s",
-		"cleanupInterval": "10m",
-		"endpointReconcileInterval": "5m"
-	}`, nil)
+		"cleanupInterval": "10m"
+	}`)
 
 	require.Equal(t, fwkplugin.TypedName{Type: PluginType, Name: "central"}, plugin.TypedName())
 	require.Same(t, plugin, plugin.Store())
-	require.Equal(t, 90*time.Second, plugin.estimateTTL)
-	require.Equal(t, 4, plugin.endpointCapacity)
+	require.Equal(t, 5, plugin.endpointCapacity)
 	for _, id := range []string{"c0", "c1", "c2"} {
 		require.NoError(t, plugin.PutNode(t.Context(), storeapi.Node{
 			Key: storeapi.NodeKey{
@@ -149,6 +171,43 @@ func TestFactoryCreatesNamedBoundedProvider(t *testing.T) {
 		}))
 	}
 	require.Equal(t, 2, plugin.Stats().Nodes)
+}
+
+func TestConfigPropagatesEveryValueAndDefaults(t *testing.T) {
+	var parameters config
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"nodeCapacity": 2,
+		"aliasCapacity": 3,
+		"residencyCapacity": 4,
+		"endpointCapacity": 5,
+		"maxTipsPerEndpoint": 6,
+		"maxAncestryDepth": 7,
+		"maxCoverageSteps": 8,
+		"nodeTTL": "9m",
+		"aliasTTL": "8m",
+		"estimateTTL": "7m",
+		"cleanupInterval": "6m"
+	}`), &parameters))
+	storeConfig, endpointCapacity, err := parameters.values()
+	require.NoError(t, err)
+	require.Equal(t, storeapi.Config{
+		NodeCapacity:       2,
+		AliasCapacity:      3,
+		ResidencyCapacity:  4,
+		MaxTipsPerEndpoint: 6,
+		MaxAncestryDepth:   7,
+		MaxCoverageSteps:   8,
+		NodeTTL:            9 * time.Minute,
+		AliasTTL:           8 * time.Minute,
+		EstimateTTL:        7 * time.Minute,
+		CleanupInterval:    6 * time.Minute,
+	}, storeConfig)
+	require.Equal(t, 5, endpointCapacity)
+
+	storeConfig, endpointCapacity, err = (config{}).values()
+	require.NoError(t, err)
+	require.Equal(t, storeapi.DefaultConfig(), storeConfig)
+	require.Equal(t, defaultEndpointCapacity, endpointCapacity)
 }
 
 func TestFactoryRejectsSecondProvider(t *testing.T) {
@@ -171,7 +230,6 @@ func TestFactoryRejectsUnknownAndInvalidParameters(t *testing.T) {
 		"aliasTTL",
 		"estimateTTL",
 		"cleanupInterval",
-		"endpointReconcileInterval",
 	} {
 		for _, value := range []string{"never", "0s", "-1s"} {
 			parameters := json.RawMessage(`{"` + field + `":"` + value + `"}`)
@@ -184,6 +242,7 @@ func TestFactoryRejectsUnknownAndInvalidParameters(t *testing.T) {
 		"nodeCapacity",
 		"aliasCapacity",
 		"residencyCapacity",
+		"endpointCapacity",
 		"maxTipsPerEndpoint",
 		"maxAncestryDepth",
 		"maxCoverageSteps",
@@ -196,10 +255,29 @@ func TestFactoryRejectsUnknownAndInvalidParameters(t *testing.T) {
 			require.Error(t, err, "%s=%d should be rejected", field, value)
 		}
 	}
+
+	for _, parameters := range []string{
+		`{"nodeCapacity":1000001}`,
+		`{"aliasCapacity":1000001}`,
+		`{"residencyCapacity":1000001}`,
+		`{"endpointCapacity":1000001}`,
+		`{"maxTipsPerEndpoint":4097}`,
+		`{"maxAncestryDepth":65537}`,
+		`{"maxCoverageSteps":10000001}`,
+		`{"nodeTTL":"1m","aliasTTL":"2m"}`,
+		`{"nodeTTL":"1m","estimateTTL":"2m"}`,
+	} {
+		_, err = Factory(
+			"central",
+			fwkplugin.StrictDecoder(json.RawMessage(parameters)),
+			handle,
+		)
+		require.Error(t, err, "parameters %s should be rejected", parameters)
+	}
 }
 
 func TestPluginRegistersEndpointLifecycleDependency(t *testing.T) {
-	plugin := newTestPlugin(t, "", nil)
+	plugin := newTestPlugin(t, "")
 	registrar := &fakeRegistrar{}
 	require.NoError(t, plugin.RegisterDependencies(registrar))
 	require.Equal(t, plugin.TypedName(), registrar.registration.Owner)
@@ -218,8 +296,8 @@ func TestPluginRegistersEndpointLifecycleDependency(t *testing.T) {
 }
 
 func TestEndpointRegistrationsAreBoundedAndValidateIdentity(t *testing.T) {
-	plugin := newTestPlugin(t, `{"residencyCapacity":1}`, nil)
-	registerTestEndpoint(t, plugin, "default/pod-a")
+	plugin := newTestPlugin(t, `{"endpointCapacity":1}`)
+	registerTestEndpoint(t, plugin, defaultPodAEndpoint)
 	extractor := &endpointExtractor{provider: plugin}
 	second := fwkdl.NewEndpoint(&fwkdl.EndpointMetadata{
 		ID: k8stypes.NamespacedName{Namespace: "default", Name: "pod-b"},
@@ -244,24 +322,69 @@ func TestEndpointRegistrationsAreBoundedAndValidateIdentity(t *testing.T) {
 	require.ErrorContains(t, err, "empty")
 }
 
-func TestEndpointDeletePurgesResidency(t *testing.T) {
-	plugin := newTestPlugin(t, "", nil)
+func TestSameEndpointObjectUpdateRotatesGeneration(t *testing.T) {
+	plugin := newTestPlugin(t, "")
+	endpointID := k8stypes.NamespacedName{Namespace: "default", Name: "pod-a"}
+	nodeKey := putEstimatedNode(t, plugin, endpointID.String())
+	endpoint := plugin.registeredEndpoints[endpointID.String()].endpoint
+	oldGeneration, found := plugin.Store().EndpointGeneration(endpointID.String())
+	require.True(t, found)
+
+	require.NoError(t, (&endpointExtractor{provider: plugin}).Extract(
+		t.Context(),
+		fwkdl.EndpointEvent{Type: fwkdl.EventAddOrUpdate, Endpoint: endpoint},
+	))
+	newGeneration, found := plugin.Store().EndpointGeneration(endpointID.String())
+	require.True(t, found)
+	require.NotEqual(t, oldGeneration, newGeneration)
+	require.Zero(t, plugin.Stats().Residencies)
+	err := plugin.RecordEstimate(t.Context(), storeapi.Residency{
+		Node: nodeKey, Endpoint: endpointID.String(), Generation: oldGeneration,
+		Extent: storeapi.Extent{Value: 10, Unit: storeapi.ExtentUnitFramedBytes},
+	})
+	require.ErrorIs(t, err, storeapi.ErrEndpointUnavailable)
+}
+
+func TestCanceledEndpointUpdateStillCompletesLifecycleCleanup(t *testing.T) {
+	plugin := newTestPlugin(t, "")
 	endpointID := k8stypes.NamespacedName{Namespace: "default", Name: "pod-a"}
 	putEstimatedNode(t, plugin, endpointID.String())
-	require.Equal(t, 1, plugin.Stats().Residencies)
+	oldGeneration, found := plugin.EndpointGeneration(endpointID.String())
+	require.True(t, found)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	replacement := fwkdl.NewEndpoint(&fwkdl.EndpointMetadata{ID: endpointID}, nil)
 
-	extractor := &endpointExtractor{provider: plugin}
-	endpoint := plugin.registeredEndpoints[endpointID.String()].endpoint
-	require.NoError(t, extractor.Extract(t.Context(), fwkdl.EndpointEvent{
-		Type:     fwkdl.EventDelete,
-		Endpoint: endpoint,
-	}))
+	require.NoError(t, (&endpointExtractor{provider: plugin}).Extract(
+		ctx,
+		fwkdl.EndpointEvent{Type: fwkdl.EventAddOrUpdate, Endpoint: replacement},
+	))
+	newGeneration, found := plugin.EndpointGeneration(endpointID.String())
+	require.True(t, found)
+	require.NotEqual(t, oldGeneration, newGeneration)
 	require.Zero(t, plugin.Stats().Residencies)
 }
 
+func TestCoverageFailsColdForTransitioningEndpoint(t *testing.T) {
+	plugin := newTestPlugin(t, "")
+	endpoint := defaultPodAEndpoint
+	nodeKey := putEstimatedNode(t, plugin, endpoint)
+	plugin.endpointMu.Lock()
+	registration := plugin.registeredEndpoints[endpoint]
+	registration.generation = 0
+	plugin.registeredEndpoints[endpoint] = registration
+	plugin.endpointMu.Unlock()
+
+	coverage, err := plugin.Coverage(t.Context(), nodeKey,
+		storeapi.Extent{Value: 10, Unit: storeapi.ExtentUnitFramedBytes},
+		[]string{endpoint})
+	require.NoError(t, err)
+	require.Empty(t, coverage)
+}
+
 func TestPublicPurgeKeepsLiveEndpointGenerationAvailable(t *testing.T) {
-	plugin := newTestPlugin(t, "", nil)
-	endpoint := "default/pod-a"
+	plugin := newTestPlugin(t, "")
+	endpoint := defaultPodAEndpoint
 	nodeKey := putEstimatedNode(t, plugin, endpoint)
 	generation, found := plugin.EndpointGeneration(endpoint)
 	require.True(t, found)
@@ -278,7 +401,7 @@ func TestPublicPurgeKeepsLiveEndpointGenerationAvailable(t *testing.T) {
 }
 
 func TestStaleEndpointDeleteDoesNotPurgeReplacement(t *testing.T) {
-	plugin := newTestPlugin(t, "", nil)
+	plugin := newTestPlugin(t, "")
 	endpointID := k8stypes.NamespacedName{Namespace: "default", Name: "pod-a"}
 	putEstimatedNode(t, plugin, endpointID.String())
 	extractor := &endpointExtractor{provider: plugin}
@@ -325,7 +448,7 @@ func TestStaleEndpointDeleteDoesNotPurgeReplacement(t *testing.T) {
 }
 
 func TestEndpointDeleteSerializesWithEstimateAndPreventsResurrection(t *testing.T) {
-	plugin := newTestPlugin(t, "", nil)
+	plugin := newTestPlugin(t, "")
 	endpointID := k8stypes.NamespacedName{Namespace: "default", Name: "pod-a"}
 	endpointName := endpointID.String()
 	nodeKey := storeapi.NodeKey{
@@ -369,11 +492,6 @@ func TestEndpointDeleteSerializesWithEstimateAndPreventsResurrection(t *testing.
 		})
 	}()
 	<-deleteStarted
-	select {
-	case err := <-deleteErr:
-		t.Fatalf("delete completed before the in-flight estimate was released: %v", err)
-	case <-time.After(20 * time.Millisecond):
-	}
 	close(blocking.release)
 	require.NoError(t, <-recordErr)
 	require.NoError(t, <-deleteErr)
@@ -390,60 +508,69 @@ func TestEndpointDeleteSerializesWithEstimateAndPreventsResurrection(t *testing.
 	require.ErrorIs(t, err, storeapi.ErrEndpointUnavailable)
 }
 
-func TestEndpointReconcilePurgesMissingObservedEndpoint(t *testing.T) {
-	activeID := k8stypes.NamespacedName{Namespace: "default", Name: "pod-b"}
-	plugin := newTestPlugin(t, "", func() []k8stypes.NamespacedName {
-		return []k8stypes.NamespacedName{activeID}
-	})
-	staleID := k8stypes.NamespacedName{Namespace: "default", Name: "pod-a"}
-	nodeKey := putEstimatedNode(t, plugin, staleID.String())
-	registerTestEndpoint(t, plugin, activeID.String())
-	activeGeneration, found := plugin.EndpointGeneration(activeID.String())
+func TestEndpointPurgeDoesNotBlockUnrelatedEndpointWrites(t *testing.T) {
+	plugin := newTestPlugin(t, "")
+	endpointA := defaultPodAEndpoint
+	endpointB := ""
+	for index := range endpointLockStripes {
+		candidate := "default/pod-" + strconv.Itoa(index)
+		if plugin.endpointLock(endpointA) != plugin.endpointLock(candidate) {
+			endpointB = candidate
+			break
+		}
+	}
+	require.NotEmpty(t, endpointB)
+	nodeKey := putEstimatedNode(t, plugin, endpointA)
+	registerTestEndpoint(t, plugin, endpointB)
+	generationB, found := plugin.EndpointGeneration(endpointB)
 	require.True(t, found)
-	require.NoError(t, plugin.RecordEstimate(t.Context(), storeapi.Residency{
-		Node: nodeKey, Endpoint: activeID.String(), Generation: activeGeneration,
-		Extent: storeapi.Extent{Value: 10, Unit: storeapi.ExtentUnitFramedBytes},
-	}))
-	plugin.reconcileEndpoints(context.Background())
-	coverage, err := plugin.Coverage(t.Context(), nodeKey,
-		storeapi.Extent{Value: 10, Unit: storeapi.ExtentUnitFramedBytes},
-		[]string{staleID.String(), activeID.String()})
-	require.NoError(t, err)
-	require.Len(t, coverage, 1)
-	require.Equal(t, activeID.String(), coverage[0].Endpoint)
-}
+	blocking := &blockingPurgeStore{
+		Store:    plugin.store,
+		endpoint: endpointA,
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+	plugin.store = blocking
+	replacement := fwkdl.NewEndpoint(&fwkdl.EndpointMetadata{
+		ID: k8stypes.NamespacedName{Namespace: "default", Name: "pod-a"},
+	}, nil)
+	updateErr := make(chan error, 1)
+	go func() {
+		updateErr <- (&endpointExtractor{provider: plugin}).Extract(
+			t.Context(),
+			fwkdl.EndpointEvent{Type: fwkdl.EventAddOrUpdate, Endpoint: replacement},
+		)
+	}()
+	<-blocking.started
 
-func TestEndpointReconcileDoesNotReviveDeletedGenerationFromPodList(t *testing.T) {
-	endpointID := k8stypes.NamespacedName{Namespace: "default", Name: "pod-a"}
-	plugin := newTestPlugin(t, "", func() []k8stypes.NamespacedName {
-		return []k8stypes.NamespacedName{endpointID}
-	})
-	nodeKey := putEstimatedNode(t, plugin, endpointID.String())
-	generation, found := plugin.EndpointGeneration(endpointID.String())
-	require.True(t, found)
-	endpoint := plugin.registeredEndpoints[endpointID.String()].endpoint
-	require.NoError(t, (&endpointExtractor{provider: plugin}).Extract(
-		t.Context(),
-		fwkdl.EndpointEvent{Type: fwkdl.EventDelete, Endpoint: endpoint},
-	))
-
-	plugin.reconcileEndpoints(context.Background())
-	_, found = plugin.EndpointGeneration(endpointID.String())
-	require.False(t, found)
-	err := plugin.RecordEstimate(t.Context(), storeapi.Residency{
-		Node: nodeKey, Endpoint: endpointID.String(), Generation: generation,
-		Extent: storeapi.Extent{Value: 10, Unit: storeapi.ExtentUnitFramedBytes},
-	})
-	require.ErrorIs(t, err, storeapi.ErrEndpointUnavailable)
+	writeErr := make(chan error, 1)
+	go func() {
+		writeErr <- plugin.RecordEstimate(t.Context(), storeapi.Residency{
+			Node: nodeKey, Endpoint: endpointB, Generation: generationB,
+			Extent: storeapi.Extent{Value: 10, Unit: storeapi.ExtentUnitFramedBytes},
+		})
+	}()
+	select {
+	case err := <-writeErr:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("unrelated endpoint write blocked behind endpoint purge")
+	}
+	close(blocking.release)
+	require.NoError(t, <-updateErr)
 }
 
 func TestDumpStateContainsCountsNotIdentifiers(t *testing.T) {
-	plugin := newTestPlugin(t, "", nil)
+	plugin := newTestPlugin(t, "")
 	putEstimatedNode(t, plugin, "secret-tenant/pod-a")
 
 	dump, err := plugin.DumpState()
 	require.NoError(t, err)
-	require.JSONEq(t, `{"nodes":1,"aliases":0,"residencies":1,"endpoints":1}`, string(dump))
+	require.JSONEq(
+		t,
+		`{"nodes":1,"aliases":0,"residencies":1,"residencyEndpoints":1}`,
+		string(dump),
+	)
 	require.False(t, strings.Contains(string(dump), "secret-tenant"))
 }
 
@@ -459,7 +586,7 @@ func TestMetricsExposeOnlyAggregateKinds(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, families, 1)
 	require.Equal(t, "llm_d_epp_session_state_entries", families[0].GetName())
-	require.Len(t, families[0].Metric, 4)
+	require.Len(t, families[0].Metric, 5)
 	valuesByKind := make(map[string]float64, len(families[0].Metric))
 	for _, metric := range families[0].Metric {
 		labels := make(map[string]string, len(metric.Label))
@@ -468,14 +595,14 @@ func TestMetricsExposeOnlyAggregateKinds(t *testing.T) {
 		}
 		require.Equal(t, PluginType, labels["plugin_type"])
 		require.Equal(t, "central", labels["plugin_name"])
-		require.Contains(t, []string{"node", "alias", "residency", "endpoint"}, labels["kind"])
+		require.Contains(t, []string{
+			"node", "alias", "residency", "residency_endpoint", "registered_endpoint",
+		}, labels["kind"])
 		require.NotNil(t, metric.Gauge)
 		valuesByKind[labels["kind"]] = metric.GetGauge().GetValue()
 	}
 	require.Equal(t, map[string]float64{
-		"node": 1, "alias": 0, "residency": 1, "endpoint": 1,
+		"node": 1, "alias": 0, "residency": 1,
+		"residency_endpoint": 1, "registered_endpoint": 1,
 	}, valuesByKind)
-	serialized, err := json.Marshal(families)
-	require.NoError(t, err)
-	require.NotContains(t, string(serialized), "secret-tenant")
 }

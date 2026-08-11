@@ -29,15 +29,15 @@ import (
 )
 
 const (
-	defaultEstimateTier    = "GPU"
-	maxTenantScopeBytes    = 4 * 1024
-	maxAliasValueBytes     = 4 * 1024
-	maxSessionIDBytes      = 4 * 1024
-	maxEndpointBytes       = 1024
-	maxCandidateEndpoints  = 4096
-	maxTierBytes           = 128
-	maxPublisherEpochBytes = 1024
-	expiryBatchSize        = 4096
+	defaultEstimateTier   = "GPU"
+	maxTenantScopeBytes   = 4 * 1024
+	maxAliasValueBytes    = 4 * 1024
+	maxSessionIDBytes     = 4 * 1024
+	maxEndpointBytes      = 1024
+	maxCandidateEndpoints = 4096
+	maxTierBytes          = 128
+	expiryBatchSize       = 4096
+	cleanupBatchSize      = 256
 )
 
 type nodeEntry struct {
@@ -111,9 +111,10 @@ func (h *expiryHeap) Pop() any {
 
 // MemoryStore is a bounded, concurrency-safe in-memory Store.
 type MemoryStore struct {
-	mu     sync.Mutex
-	config Config
-	clock  clock
+	mu             sync.Mutex
+	nodeCapacityMu sync.Mutex
+	config         Config
+	clock          clock
 
 	nodes    map[NodeKey]*nodeEntry
 	children map[NodeKey]map[NodeKey]struct{}
@@ -190,13 +191,16 @@ func (s *MemoryStore) runExpiry(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.expireCooperatively(s.clock.Now())
+			s.expireCooperatively(ctx, s.clock.Now())
 		}
 	}
 }
 
-func (s *MemoryStore) expireCooperatively(now time.Time) {
+func (s *MemoryStore) expireCooperatively(ctx context.Context, now time.Time) {
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		s.mu.Lock()
 		more := s.expireBatchLocked(now, expiryBatchSize)
 		s.mu.Unlock()
@@ -220,10 +224,24 @@ func (s *MemoryStore) PutNode(ctx context.Context, child Node) error {
 	}
 	child.Parent = cloneNodeKey(child.Parent)
 
+	s.nodeCapacityMu.Lock()
+	defer s.nodeCapacityMu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			s.mu.Unlock()
+		}
+	}()
 	now := s.clock.Now()
 	s.removeNodeIfExpiredLocked(child.Key, now)
+	if existing, ok := s.nodes[child.Key]; ok {
+		if !nodesEqual(existing.node, child) {
+			return ErrNodeConflict
+		}
+		s.touchNodeLocked(existing, now)
+		return nil
+	}
 	depth := 1
 
 	if child.Parent != nil {
@@ -242,26 +260,11 @@ func (s *MemoryStore) PutNode(ctx context.Context, child Node) error {
 		if child.CumulativeExtent.Value < parentEntry.node.CumulativeExtent.Value {
 			return fmt.Errorf("%w: child extent is smaller than parent extent", ErrInvalidNode)
 		}
-		isAncestor, ancestryErr := s.isAncestorLocked(child.Key, *child.Parent)
-		if ancestryErr != nil {
-			return ancestryErr
-		}
-		if isAncestor || child.Key == *child.Parent {
-			return ErrAncestryCycle
-		}
 		depth = parentEntry.depth + 1
 		if depth > s.config.MaxAncestryDepth {
 			return ErrAncestryTooDeep
 		}
 		s.touchNodeLocked(parentEntry, now)
-	}
-
-	if existing, ok := s.nodes[child.Key]; ok {
-		if !nodesEqual(existing.node, child) {
-			return ErrNodeConflict
-		}
-		s.touchNodeLocked(existing, now)
-		return nil
 	}
 
 	entry := &nodeEntry{node: child, depth: depth, expiresAt: now.Add(s.config.NodeTTL)}
@@ -274,9 +277,9 @@ func (s *MemoryStore) PutNode(ctx context.Context, child Node) error {
 		}
 		s.children[*child.Parent][child.Key] = struct{}{}
 	}
-	for len(s.nodes) > s.config.NodeCapacity {
-		s.evictOldestNodeLocked()
-	}
+	s.mu.Unlock()
+	locked = false
+	s.enforceNodeCapacity()
 	return nil
 }
 
@@ -346,6 +349,9 @@ func (s *MemoryStore) ResolveAlias(ctx context.Context, key AliasKey) (AliasTarg
 	if ctx == nil || ctx.Err() != nil {
 		return AliasTarget{}, false
 	}
+	if validateAliasKey(key) != nil {
+		return AliasTarget{}, false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.clock.Now()
@@ -379,12 +385,6 @@ func (s *MemoryStore) RecordEstimate(ctx context.Context, residency Residency) e
 	if err := validateResidency(residency); err != nil {
 		return err
 	}
-	if residency.Source == "" {
-		residency.Source = EvidenceSourceEstimate
-	}
-	if residency.Source != EvidenceSourceEstimate {
-		return fmt.Errorf("%w: RecordEstimate requires estimated evidence", ErrInvalidRecord)
-	}
 	if residency.Tier == "" {
 		residency.Tier = defaultEstimateTier
 	}
@@ -407,7 +407,6 @@ func (s *MemoryStore) RecordEstimate(ctx context.Context, residency Residency) e
 	}
 	residency.ObservedAt = now
 	residency.ExpiresAt = now.Add(s.config.EstimateTTL)
-	residency.PublisherEpoch = ""
 	s.touchNodeLocked(node, now)
 
 	key := residencyKey{Node: residency.Node, Endpoint: residency.Endpoint, Tier: residency.Tier}
@@ -530,10 +529,10 @@ func (s *MemoryStore) Coverage(
 					matchedExtent.Value = entry.residency.Extent.Value
 				}
 				matchedNodeCopy := matchedNode
+				matchedExtent.Value = min(matchedExtent.Value, requested.Value)
 				fraction := 0.0
 				if requested.Value > 0 {
-					covered := min(matchedExtent.Value, requested.Value)
-					fraction = float64(covered) / float64(requested.Value)
+					fraction = float64(matchedExtent.Value) / float64(requested.Value)
 				}
 				choice := coverageChoice{
 					coverage: EndpointCoverage{
@@ -543,7 +542,6 @@ func (s *MemoryStore) Coverage(
 						Covered:     matchedExtent,
 						Requested:   requested,
 						Fraction:    fraction,
-						Source:      entry.residency.Source,
 					},
 					observedAt:    entry.residency.ObservedAt,
 					residencyNode: entry.residency.Node,
@@ -585,9 +583,6 @@ func (c coverageChoice) betterThan(other coverageChoice) bool {
 	if c.coverage.Covered.Value != other.coverage.Covered.Value {
 		return c.coverage.Covered.Value > other.coverage.Covered.Value
 	}
-	if c.coverage.Source != other.coverage.Source {
-		return c.coverage.Source == EvidenceSourceConfirmed
-	}
 	if !c.observedAt.Equal(other.observedAt) {
 		return c.observedAt.After(other.observedAt)
 	}
@@ -599,20 +594,33 @@ func (s *MemoryStore) PurgeEndpoint(ctx context.Context, endpoint string) error 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if endpoint == "" {
-		return fmt.Errorf("%w: endpoint is required", ErrInvalidRecord)
+	if endpoint == "" || len(endpoint) > maxEndpointBytes {
+		return fmt.Errorf("%w: endpoint is empty or too large", ErrInvalidRecord)
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for key := range s.residenciesByEndpoint[endpoint] {
-		s.removeResidencyLocked(key)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		processed := 0
+		for key := range s.residenciesByEndpoint[endpoint] {
+			s.removeResidencyLocked(key)
+			processed++
+			if processed == cleanupBatchSize {
+				break
+			}
+		}
+		done := len(s.residenciesByEndpoint[endpoint]) == 0
+		s.mu.Unlock()
+		if done {
+			return nil
+		}
+		runtime.Gosched()
 	}
-	return nil
 }
 
-// Expire removes stale entries and their dependent records.
-func (s *MemoryStore) Expire(now time.Time) {
+func (s *MemoryStore) expire(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.expireLocked(now)
@@ -623,10 +631,10 @@ func (s *MemoryStore) Stats() Stats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return Stats{
-		Nodes:       len(s.nodes),
-		Aliases:     len(s.aliases),
-		Residencies: len(s.residencies),
-		Endpoints:   len(s.residenciesByEndpoint),
+		Nodes:              len(s.nodes),
+		Aliases:            len(s.aliases),
+		Residencies:        len(s.residencies),
+		ResidencyEndpoints: len(s.residenciesByEndpoint),
 	}
 }
 
@@ -721,6 +729,10 @@ func (s *MemoryStore) removeExpiredNodeAndAncestorsLocked(key NodeKey, now time.
 		if entry == nil || entry.expiresAt.After(now) || len(s.children[current]) != 0 {
 			return
 		}
+		if len(s.aliasesByNode[current]) != 0 || len(s.residenciesByNode[current]) != 0 {
+			s.scheduleNodeExpiryLocked(current, now.Add(s.config.CleanupInterval))
+			return
+		}
 		parent := cloneNodeKey(entry.node.Parent)
 		if !s.removeNodeLocked(current) || parent == nil {
 			return
@@ -751,8 +763,7 @@ func (s *MemoryStore) compactEndpointTipsLocked(
 			existing := s.residencies[existingKey]
 			added := s.residencies[newKey]
 			if existing != nil && added != nil &&
-				added.residency.Extent.Value >= existing.residency.Extent.Value &&
-				evidenceAtLeastAsStrong(added.residency.Source, existing.residency.Source) {
+				added.residency.Extent.Value >= existing.residency.Extent.Value {
 				s.removeResidencyLocked(existingKey)
 			}
 			continue
@@ -765,8 +776,7 @@ func (s *MemoryStore) compactEndpointTipsLocked(
 			existing := s.residencies[existingKey]
 			added := s.residencies[newKey]
 			if existing != nil && added != nil &&
-				existing.residency.Extent.Value >= added.residency.Extent.Value &&
-				evidenceAtLeastAsStrong(existing.residency.Source, added.residency.Source) {
+				existing.residency.Extent.Value >= added.residency.Extent.Value {
 				s.removeResidencyLocked(newKey)
 				return nil
 			}
@@ -781,13 +791,6 @@ func (s *MemoryStore) compactEndpointTipsLocked(
 		s.removeResidencyLocked(oldest)
 	}
 	return nil
-}
-
-func evidenceAtLeastAsStrong(left, right EvidenceSource) bool {
-	if left == right {
-		return true
-	}
-	return left == EvidenceSourceConfirmed
 }
 
 func (s *MemoryStore) endpointTipCountLocked(scope TenantScope, endpoint string) int {
@@ -848,9 +851,6 @@ func (s *MemoryStore) ancestorSetLocked(
 		if depth >= s.config.MaxAncestryDepth {
 			return nil, ErrAncestryTooDeep
 		}
-		if _, seen := ancestors[current]; seen {
-			return nil, ErrAncestryCycle
-		}
 		entry, ok := s.nodes[current]
 		if !ok {
 			break
@@ -872,7 +872,6 @@ func (s *MemoryStore) deepestCommonAncestorLocked(
 	now time.Time,
 	coverageSteps *int,
 ) (NodeKey, Extent, bool, error) {
-	seen := make(map[NodeKey]struct{})
 	current := other
 	for depth := 0; ; depth++ {
 		if err := s.consumeCoverageStep(ctx, coverageSteps); err != nil {
@@ -881,10 +880,6 @@ func (s *MemoryStore) deepestCommonAncestorLocked(
 		if depth >= s.config.MaxAncestryDepth {
 			return NodeKey{}, Extent{}, false, ErrAncestryTooDeep
 		}
-		if _, duplicate := seen[current]; duplicate {
-			return NodeKey{}, Extent{}, false, ErrAncestryCycle
-		}
-		seen[current] = struct{}{}
 		entry, ok := s.nodes[current]
 		if !ok {
 			return NodeKey{}, Extent{}, false, nil
@@ -914,7 +909,6 @@ func (s *MemoryStore) consumeCoverageStep(ctx context.Context, steps *int) error
 }
 
 func (s *MemoryStore) isAncestorLocked(ancestor, descendant NodeKey) (bool, error) {
-	seen := make(map[NodeKey]struct{})
 	current := descendant
 	for depth := 0; ; depth++ {
 		if depth >= s.config.MaxAncestryDepth {
@@ -923,10 +917,6 @@ func (s *MemoryStore) isAncestorLocked(ancestor, descendant NodeKey) (bool, erro
 		if current == ancestor {
 			return true, nil
 		}
-		if _, duplicate := seen[current]; duplicate {
-			return false, ErrAncestryCycle
-		}
-		seen[current] = struct{}{}
 		entry, ok := s.nodes[current]
 		if !ok || entry.node.Parent == nil {
 			return false, nil
@@ -941,13 +931,44 @@ func (s *MemoryStore) touchNodeLocked(entry *nodeEntry, now time.Time) {
 	s.scheduleNodeExpiryLocked(entry.node.Key, entry.expiresAt)
 }
 
-func (s *MemoryStore) evictOldestNodeLocked() {
-	for element := s.nodeLRU.Back(); element != nil; element = element.Prev() {
-		key := element.Value.(NodeKey)
-		if s.removeNodeLocked(key) {
+func (s *MemoryStore) enforceNodeCapacity() {
+	for {
+		s.mu.Lock()
+		processed := 0
+		for len(s.nodes) > s.config.NodeCapacity && processed < cleanupBatchSize {
+			if !s.evictOldestNodeStepLocked() {
+				break
+			}
+			processed++
+		}
+		done := len(s.nodes) <= s.config.NodeCapacity || processed == 0
+		s.mu.Unlock()
+		if done {
 			return
 		}
+		runtime.Gosched()
 	}
+}
+
+func (s *MemoryStore) evictOldestNodeStepLocked() bool {
+	for element := s.nodeLRU.Back(); element != nil; element = element.Prev() {
+		key := element.Value.(NodeKey)
+		if len(s.children[key]) != 0 {
+			continue
+		}
+		for aliasKey := range s.aliasesByNode[key] {
+			s.removeAliasLocked(aliasKey)
+			return true
+		}
+		for residencyKey := range s.residenciesByNode[key] {
+			s.removeResidencyLocked(residencyKey)
+			return true
+		}
+		if s.removeNodeLocked(key) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *MemoryStore) evictOldestAliasLocked() {
@@ -973,14 +994,9 @@ func (s *MemoryStore) removeNodeIfExpiredLocked(key NodeKey, now time.Time) {
 
 func (s *MemoryStore) removeNodeLocked(key NodeKey) bool {
 	entry, ok := s.nodes[key]
-	if !ok || len(s.children[key]) != 0 {
+	if !ok || len(s.children[key]) != 0 ||
+		len(s.aliasesByNode[key]) != 0 || len(s.residenciesByNode[key]) != 0 {
 		return false
-	}
-	for aliasKey := range s.aliasesByNode[key] {
-		s.removeAliasLocked(aliasKey)
-	}
-	for residencyKey := range s.residenciesByNode[key] {
-		s.removeResidencyLocked(residencyKey)
 	}
 	delete(s.aliasesByNode, key)
 	delete(s.residenciesByNode, key)
@@ -1002,10 +1018,12 @@ func (s *MemoryStore) removeAliasLocked(key AliasKey) {
 	if !ok {
 		return
 	}
-	s.unlinkAliasFromNodeLocked(key, entry.target.Node)
+	node := entry.target.Node
+	s.unlinkAliasFromNodeLocked(key, node)
 	s.removeExpiryLocked(entry.expiry)
 	s.aliasLRU.Remove(entry.element)
 	delete(s.aliases, key)
+	s.removeExpiredNodeAndAncestorsLocked(node, s.clock.Now())
 }
 
 func (s *MemoryStore) removeResidencyLocked(key residencyKey) {
@@ -1042,6 +1060,7 @@ func (s *MemoryStore) removeResidencyLocked(key residencyKey) {
 	s.removeExpiryLocked(entry.expiry)
 	s.residencyLRU.Remove(entry.element)
 	delete(s.residencies, key)
+	s.removeExpiredNodeAndAncestorsLocked(key.Node, s.clock.Now())
 }
 
 func (s *MemoryStore) linkAliasToNodeLocked(key AliasKey, node NodeKey) {
@@ -1130,8 +1149,7 @@ func validateResidency(residency Residency) error {
 	}
 	if residency.Endpoint == "" || len(residency.Endpoint) > maxEndpointBytes ||
 		residency.Generation == 0 ||
-		len(residency.Tier) > maxTierBytes ||
-		len(residency.PublisherEpoch) > maxPublisherEpochBytes {
+		len(residency.Tier) > maxTierBytes {
 		return ErrInvalidRecord
 	}
 	return validateExtentUnit(residency.Extent.Unit)
