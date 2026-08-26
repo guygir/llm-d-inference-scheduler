@@ -685,7 +685,7 @@ func (r *Runner) registerInTreePlugins() {
 	fwkplugin.RegisterAsDefaultProducer(latencyobserver.LatencyObserverProducerType, fwkplugin.StabilityAlpha, latencyobserver.LatencyObserverFactory, attrlatency.TTFTPercentilesDataKey)
 	// Alpha
 	fwkplugin.Register(sessionmanager.PluginType, fwkplugin.StabilityAlpha, sessionmanager.Factory)
-	fwkplugin.RegisterAsDefaultProducer(sessionstate.SessionStateProducerType, fwkplugin.StabilityAlpha, sessionstate.Factory, attrsession.SessionStateDataKey)
+	fwkplugin.RegisterAsDefaultProducer(sessionstate.SessionStateProducerType, fwkplugin.StabilityAlpha, sessionstate.Factory, sessionstate.SessionStateDataKey)
 
 	// Latency predictor plugins
 	// Beta
