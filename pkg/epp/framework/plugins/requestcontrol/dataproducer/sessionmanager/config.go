@@ -59,6 +59,7 @@ type resolvedConfig struct {
 	bindingTTL              time.Duration
 	maxBindings             int
 	cacheNamespaces         map[namespaceKey]string
+	cacheEndpoints          map[string]struct{}
 }
 
 func (c Config) resolve() (resolvedConfig, error) {
@@ -69,6 +70,7 @@ func (c Config) resolve() (resolvedConfig, error) {
 		bindingTTL:              defaultBindingTTL,
 		maxBindings:             defaultMaxBindings,
 		cacheNamespaces:         make(map[namespaceKey]string, len(c.CacheNamespaces)),
+		cacheEndpoints:          make(map[string]struct{}),
 	}
 	if strings.TrimSpace(cfg.deploymentID) == "" ||
 		cfg.deploymentID != strings.TrimSpace(cfg.deploymentID) ||
@@ -109,6 +111,9 @@ func (c Config) resolve() (resolvedConfig, error) {
 		endpoint := strings.TrimSpace(item.Endpoint)
 		model := strings.TrimSpace(item.ModelName)
 		namespace := strings.TrimSpace(item.CacheNamespace)
+		if item.GroupIdx != nil && *item.GroupIdx < 0 {
+			return resolvedConfig{}, errors.New("cacheNamespaces groupIdx must be nonnegative")
+		}
 		if endpoint == "" || model == "" || namespace == "" ||
 			len(endpoint) > maxConfigurationLength ||
 			len(model) > maxConfigurationLength || len(namespace) > maxConfigurationLength {
@@ -124,6 +129,7 @@ func (c Config) resolve() (resolvedConfig, error) {
 			)
 		}
 		cfg.cacheNamespaces[key] = namespace
+		cfg.cacheEndpoints[endpoint] = struct{}{}
 	}
 	if cfg.eventCorrelationEnabled && len(cfg.cacheNamespaces) == 0 {
 		return resolvedConfig{}, errors.New("cacheNamespaces is required when eventCorrelationEnabled is true")

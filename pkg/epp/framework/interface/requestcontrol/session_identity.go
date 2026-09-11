@@ -21,7 +21,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 )
 
-// IdentitySource identifies the trusted adapter that supplied a SessionIdentity.
+// IdentitySource identifies the input or derivation source of a SessionIdentity.
 type IdentitySource string
 
 const (

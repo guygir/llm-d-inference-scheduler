@@ -17,8 +17,11 @@ limitations under the License.
 package sessionmanager
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,4 +35,24 @@ func TestStampCounterRemainsExhausted(t *testing.T) {
 	require.ErrorContains(t, err, "exhausted")
 	_, err = generator.next()
 	require.ErrorContains(t, err, "exhausted")
+}
+
+func TestStampGeneratorRestartChangesNonce(t *testing.T) {
+	first, err := newStampGenerator()
+	require.NoError(t, err)
+	second, err := newStampGenerator()
+	require.NoError(t, err)
+
+	firstStamp, err := first.next()
+	require.NoError(t, err)
+	secondStamp, err := second.next()
+	require.NoError(t, err)
+	firstRaw, err := base64.RawURLEncoding.DecodeString(firstStamp)
+	require.NoError(t, err)
+	secondRaw, err := base64.RawURLEncoding.DecodeString(secondStamp)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, firstRaw[:16], secondRaw[:16])
+	assert.Equal(t, uint64(1), binary.BigEndian.Uint64(firstRaw[16:]))
+	assert.Equal(t, uint64(1), binary.BigEndian.Uint64(secondRaw[16:]))
 }

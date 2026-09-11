@@ -23,7 +23,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
@@ -39,10 +38,11 @@ const PluginType = "session-manager"
 var (
 	_ requestcontrol.SessionCacheManager = (*Producer)(nil)
 	_ fwkplugin.ConsumerPlugin           = (*Producer)(nil)
+	_ requestcontrol.PreRequest          = (*Producer)(nil)
 	_ fwkplugin.StateDumper              = (*Producer)(nil)
 )
 
-// Producer publishes scoped identities and optional PR #2716 cache requests.
+// Producer publishes scoped identities and optional precise-cache requests.
 type Producer struct {
 	typedName       fwkplugin.TypedName
 	identityKey     fwkplugin.DataKey
@@ -54,6 +54,7 @@ type Producer struct {
 	scopeVersion    string
 	correlation     bool
 	cacheNamespaces map[namespaceKey]string
+	cacheEndpoints  map[string]struct{}
 	stamps          *stampGenerator
 	bindings        *bindingStore
 	metrics         *managerMetrics
@@ -101,6 +102,7 @@ func Factory(name string, decoder *json.Decoder, handle fwkplugin.Handle) (fwkpl
 		scopeVersion:    scopeVersion,
 		correlation:     resolved.eventCorrelationEnabled,
 		cacheNamespaces: resolved.cacheNamespaces,
+		cacheEndpoints:  resolved.cacheEndpoints,
 		stamps:          stamps,
 		bindings:        bindings,
 		metrics:         metrics,
@@ -180,6 +182,34 @@ func (p *Producer) Produce(_ context.Context, request *fwksched.InferenceRequest
 	return nil
 }
 
+// PreRequest binds a request stamp to the endpoint selected for dispatch.
+func (p *Producer) PreRequest(
+	_ context.Context,
+	request *fwksched.InferenceRequest,
+	result *fwksched.SchedulingResult,
+) error {
+	if !p.correlation || request == nil || result == nil {
+		return nil
+	}
+	cacheRequest, ok := fwksched.ReadRequestAttribute[requestcontrol.SessionCacheRequest](
+		request,
+		p.cacheRequestKey,
+	)
+	if !ok || cacheRequest.Stamp == "" {
+		return nil
+	}
+	profile := result.ProfileResults[result.PrimaryProfileName]
+	if profile == nil || len(profile.TargetEndpoints) != 1 || profile.TargetEndpoints[0] == nil {
+		return nil
+	}
+	metadata := profile.TargetEndpoints[0].GetMetadata()
+	if metadata == nil || metadata.Address == "" || metadata.Port == "" {
+		return nil
+	}
+	p.bindings.bindEndpoint(cacheRequest.Stamp, fmt.Sprintf("%s:%s", metadata.Address, metadata.Port))
+	return nil
+}
+
 // CacheNamespace returns only preconfigured endpoint/model/group compatibility.
 func (p *Producer) CacheNamespace(source kvevents.EventSource, group *int) string {
 	return p.cacheNamespaces[makeNamespaceKey(source.Endpoint, source.ModelName, group)]
@@ -192,7 +222,7 @@ func (p *Producer) ProcessEvents(ctx context.Context, source kvevents.EventSourc
 	}
 	for _, event := range batch.Events {
 		stored, ok := event.(*kvevents.BlockStoredEvent)
-		if !ok || !sessionStoreIndexable(stored) || len(stored.BlockHashes) == 0 {
+		if !ok || !kvevents.IsIndexableLocalGPUStore(stored) {
 			continue
 		}
 		if stored.SessionID == nil || *stored.SessionID == "" {
@@ -203,12 +233,18 @@ func (p *Producer) ProcessEvents(ctx context.Context, source kvevents.EventSourc
 			p.metrics.eventOutcomes.WithLabelValues("namespace_rejected").Inc()
 			continue
 		}
-		_, known, duplicate, mismatch := p.bindings.observe(*stored.SessionID, source.ModelName)
+		_, known, duplicate, mismatch, stale := p.bindings.observe(
+			*stored.SessionID,
+			source.ModelName,
+			source.Endpoint,
+		)
 		switch {
 		case !known:
 			p.metrics.eventOutcomes.WithLabelValues("unknown").Inc()
 		case mismatch:
 			p.metrics.eventOutcomes.WithLabelValues("request_mismatch").Inc()
+		case stale:
+			p.metrics.eventOutcomes.WithLabelValues("reset_stale").Inc()
 		case duplicate:
 			p.metrics.eventOutcomes.WithLabelValues("duplicate").Inc()
 		default:
@@ -218,28 +254,14 @@ func (p *Producer) ProcessEvents(ctx context.Context, source kvevents.EventSourc
 	return nil
 }
 
-func sessionStoreIndexable(event *kvevents.BlockStoredEvent) bool {
-	if !strings.EqualFold(event.DeviceTier, "gpu") ||
-		event.Ownership != "" ||
-		(event.Locality != "" && !strings.EqualFold(event.Locality, "local")) ||
-		event.BlockSize <= 0 {
-		return false
-	}
-	switch event.KVCacheSpecKind {
-	case kvevents.KVCacheSpecKindFullAttention, kvevents.KVCacheSpecKindMlaAttention:
-		return true
-	case "":
-		return event.GroupIdx == nil
-	default:
-		return false
-	}
-}
-
-// Reset acknowledges source invalidation. The immutable namespace map and
-// request-only bindings contain no physical residency to clear.
-func (p *Producer) Reset(ctx context.Context, _ string) error {
+// Reset invalidates bindings dispatched before the source reset. The manager
+// retains no physical residency.
+func (p *Producer) Reset(ctx context.Context, endpoint string) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if _, configured := p.cacheEndpoints[endpoint]; configured {
+		p.bindings.resetEndpoint(endpoint)
 	}
 	p.metrics.eventOutcomes.WithLabelValues("reset").Inc()
 	return nil

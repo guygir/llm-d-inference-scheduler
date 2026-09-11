@@ -23,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"strings"
 	"sync"
 
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -57,7 +56,7 @@ func (c *sessionEventConsumer) ProcessEvents(ctx context.Context, source kvevent
 		scope := kvblock.EngineScope{Endpoint: source.Endpoint, DataParallelRank: batch.DataParallelRank}
 		switch ev := event.(type) {
 		case *kvevents.BlockStoredEvent:
-			if !sessionStoreIndexable(ev) || len(ev.BlockHashes) == 0 {
+			if !kvevents.IsIndexableLocalGPUStore(ev) {
 				continue
 			}
 			scope.GroupIdx = ev.GroupIdx
@@ -70,7 +69,7 @@ func (c *sessionEventConsumer) ProcessEvents(ctx context.Context, source kvevent
 			}
 			c.rememberLocation(sessionLocation{scope: scope, blockSizeTokens: ev.BlockSize})
 		case *kvevents.BlockRemovedEvent:
-			if !localGPUEvent(ev.DeviceTier, ev.Locality, ev.Ownership) {
+			if !kvevents.IsLocalGPUEvent(ev.DeviceTier, ev.Locality, ev.Ownership) {
 				continue
 			}
 			scope.GroupIdx = ev.GroupIdx
@@ -139,25 +138,6 @@ func (c *sessionEventConsumer) prefixLocations(prefix fwkrc.SessionCachePrefix, 
 		}
 	}
 	return result
-}
-
-func sessionStoreIndexable(event *kvevents.BlockStoredEvent) bool {
-	if !localGPUEvent(event.DeviceTier, event.Locality, event.Ownership) || event.BlockSize <= 0 {
-		return false
-	}
-	switch event.KVCacheSpecKind {
-	case kvevents.KVCacheSpecKindFullAttention, kvevents.KVCacheSpecKindMlaAttention:
-		return true
-	case "":
-		return event.GroupIdx == nil
-	default:
-		return false
-	}
-}
-
-func localGPUEvent(tier, locality, ownership string) bool {
-	return strings.EqualFold(tier, "gpu") && ownership == "" &&
-		(locality == "" || strings.EqualFold(locality, "local"))
 }
 
 func (p *Producer) produceFromSession(ctx context.Context, request *scheduling.InferenceRequest, endpoints []scheduling.Endpoint) error {

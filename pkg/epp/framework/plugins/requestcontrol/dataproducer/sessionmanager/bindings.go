@@ -25,7 +25,9 @@ import (
 type requestBinding struct {
 	sessionTag string
 	modelName  string
+	endpoint   string
 	createdAt  time.Time
+	boundAt    time.Time
 	observed   bool
 }
 
@@ -38,6 +40,7 @@ type bindingStore struct {
 	mu       sync.Mutex
 	items    map[string]*bindingEntry
 	order    *list.List
+	resetAt  map[string]time.Time
 	ttl      time.Duration
 	capacity int
 	now      func() time.Time
@@ -47,6 +50,7 @@ func newBindingStore(ttl time.Duration, capacity int) *bindingStore {
 	return &bindingStore{
 		items:    make(map[string]*bindingEntry),
 		order:    list.New(),
+		resetAt:  make(map[string]time.Time),
 		ttl:      ttl,
 		capacity: capacity,
 		now:      time.Now,
@@ -71,24 +75,49 @@ func (s *bindingStore) put(stamp, sessionTag, modelName string) {
 	}
 }
 
-func (s *bindingStore) observe(stamp, modelName string) (requestBinding, bool, bool, bool) {
+func (s *bindingStore) bindEndpoint(stamp, endpoint string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	entry, ok := s.items[stamp]
+	if !ok || !entry.binding.createdAt.Add(s.ttl).After(now) {
+		if ok {
+			s.removeLocked(stamp, entry)
+		}
+		return false
+	}
+	entry.binding.endpoint = endpoint
+	entry.binding.boundAt = now
+	return true
+}
+
+func (s *bindingStore) observe(stamp, modelName, endpoint string) (requestBinding, bool, bool, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
 	entry, ok := s.items[stamp]
 	if !ok {
-		return requestBinding{}, false, false, false
+		return requestBinding{}, false, false, false, false
 	}
 	if !entry.binding.createdAt.Add(s.ttl).After(now) {
 		s.removeLocked(stamp, entry)
-		return requestBinding{}, false, false, false
+		return requestBinding{}, false, false, false, false
 	}
-	if entry.binding.modelName != modelName {
-		return requestBinding{}, true, false, true
+	if entry.binding.modelName != modelName || entry.binding.endpoint != endpoint {
+		return requestBinding{}, true, false, true, false
+	}
+	if resetAt, ok := s.resetAt[endpoint]; ok && !entry.binding.boundAt.After(resetAt) {
+		return requestBinding{}, true, false, false, true
 	}
 	duplicate := entry.binding.observed
 	entry.binding.observed = true
-	return entry.binding, true, duplicate, false
+	return entry.binding, true, duplicate, false, false
+}
+
+func (s *bindingStore) resetEndpoint(endpoint string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resetAt[endpoint] = s.now()
 }
 
 func (s *bindingStore) len() int {

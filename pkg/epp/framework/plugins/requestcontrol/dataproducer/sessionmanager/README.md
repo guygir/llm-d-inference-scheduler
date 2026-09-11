@@ -69,9 +69,11 @@ SessionCacheRequest
 
 The precise-prefix integration writes the stamp to vLLM request-body
 `session_id` and requests incremental reporting. A client body value is
-overwritten in this opt-in mode. Stamped local-GPU store events are classified
-against a bounded replica-local binding, but v1 creates no relation or
-session-derived cache-prefix signal.
+overwritten in this opt-in mode. Before dispatch, the manager binds the stamp
+to the single endpoint selected by the primary scheduling profile. Stamped
+local-GPU store events are classified against that bounded replica-local
+binding; another endpoint, a reset source, or an unbound request fails open.
+Version 1 creates no relation or session-derived cache-prefix signal.
 
 ## Operational boundary
 

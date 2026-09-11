@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -28,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/ptr"
 
+	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
 	fwkrh "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requesthandling"
@@ -45,6 +47,7 @@ func testProducer(t *testing.T, correlation bool) *Producer {
 		"eventCorrelationEnabled":%t,
 		"cacheNamespaces":[
 			{"endpoint":"pod-a:8000","modelName":"model","cacheNamespace":"model-v1"},
+			{"endpoint":"pod-b:8000","modelName":"model","cacheNamespace":"model-v1"},
 			{"endpoint":"pod-a:8000","modelName":"other-model","cacheNamespace":"other-model-v1"}
 		]
 	}`, writeTestKey(t), correlation)
@@ -67,6 +70,21 @@ func eligibleRequest(alias string) *fwksched.InferenceRequest {
 		request.PutAttribute(agentidentity.AgentIdentityKey, alias)
 	}
 	return request
+}
+
+func bindRequest(t *testing.T, producer *Producer, request *fwksched.InferenceRequest, address, port string) {
+	t.Helper()
+	endpoint := fwksched.NewEndpoint(
+		&fwkdl.EndpointMetadata{Address: address, Port: port},
+		&fwkdl.Metrics{},
+		nil,
+	)
+	require.NoError(t, producer.PreRequest(t.Context(), request, &fwksched.SchedulingResult{
+		PrimaryProfileName: "default",
+		ProfileResults: map[string]*fwksched.ProfileRunResult{
+			"default": {TargetEndpoints: []fwksched.Endpoint{endpoint}},
+		},
+	}))
 }
 
 func TestProducePublishesIdentityAndEmptyPrefixRequest(t *testing.T) {
@@ -143,6 +161,7 @@ func TestProcessEventsCorrelatesKnownCompatibleStampOnly(t *testing.T) {
 	producer := testProducer(t, true)
 	request := eligibleRequest("alias")
 	require.NoError(t, producer.Produce(t.Context(), request, nil))
+	bindRequest(t, producer, request, "pod-a", "8000")
 	cacheRequest, ok := fwksched.ReadRequestAttribute[requestcontrol.SessionCacheRequest](
 		request,
 		requestcontrol.SessionCacheRequestDataKey.WithNonEmptyProducerName("sessions"),
@@ -160,6 +179,15 @@ func TestProcessEventsCorrelatesKnownCompatibleStampOnly(t *testing.T) {
 	assert.Zero(t, testutil.ToFloat64(producer.metrics.eventOutcomes.WithLabelValues("known")))
 
 	event.BlockHashes = []uint64{1}
+	require.NoError(t, producer.ProcessEvents(
+		context.Background(),
+		kvevents.EventSource{ModelName: "model", Endpoint: "pod-b:8000"},
+		kvevents.EventBatch{Events: []kvevents.GenericEvent{event}},
+	))
+	assert.Equal(t, float64(1), testutil.ToFloat64(
+		producer.metrics.eventOutcomes.WithLabelValues("request_mismatch"),
+	))
+
 	require.NoError(t, producer.ProcessEvents(context.Background(), source, kvevents.EventBatch{
 		Events: []kvevents.GenericEvent{event},
 	}))
@@ -182,7 +210,7 @@ func TestProcessEventsCorrelatesKnownCompatibleStampOnly(t *testing.T) {
 	require.NoError(t, producer.ProcessEvents(context.Background(), source, kvevents.EventBatch{
 		Events: []kvevents.GenericEvent{event},
 	}))
-	assert.Equal(t, float64(1), testutil.ToFloat64(producer.metrics.eventOutcomes.WithLabelValues("request_mismatch")))
+	assert.Equal(t, float64(2), testutil.ToFloat64(producer.metrics.eventOutcomes.WithLabelValues("request_mismatch")))
 
 	source.ModelName = "unknown-model"
 	require.NoError(t, producer.ProcessEvents(context.Background(), source, kvevents.EventBatch{
@@ -193,6 +221,99 @@ func TestProcessEventsCorrelatesKnownCompatibleStampOnly(t *testing.T) {
 		kvevents.EventSource{ModelName: "model", Endpoint: "unknown"},
 		nil,
 	))
+
+	require.NoError(t, producer.Reset(t.Context(), "pod-a:8000"))
+	source.ModelName = "model"
+	require.NoError(t, producer.ProcessEvents(context.Background(), source, kvevents.EventBatch{
+		Events: []kvevents.GenericEvent{event},
+	}))
+	assert.Equal(t, float64(1), testutil.ToFloat64(producer.metrics.eventOutcomes.WithLabelValues("reset_stale")))
+}
+
+func TestProcessEventsFiltersMalformedStoresWithoutConsumingBinding(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*kvevents.BlockStoredEvent)
+		valid  bool
+	}{
+		{name: "omitted legacy tier", valid: true},
+		{name: "cpu", mutate: func(event *kvevents.BlockStoredEvent) { event.DeviceTier = "cpu" }},
+		{name: "remote", mutate: func(event *kvevents.BlockStoredEvent) { event.Locality = "remote" }},
+		{name: "owned", mutate: func(event *kvevents.BlockStoredEvent) { event.Ownership = "connector" }},
+		{name: "invalid block size", mutate: func(event *kvevents.BlockStoredEvent) { event.BlockSize = 0 }},
+		{name: "unsupported spec", mutate: func(event *kvevents.BlockStoredEvent) {
+			event.KVCacheSpecKind = kvevents.KVCacheSpecKindSlidingWindow
+		}},
+		{name: "unstamped", mutate: func(event *kvevents.BlockStoredEvent) { event.SessionID = nil }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			producer := testProducer(t, true)
+			request := eligibleRequest("alias")
+			require.NoError(t, producer.Produce(t.Context(), request, nil))
+			bindRequest(t, producer, request, "pod-a", "8000")
+			cacheRequest, ok := fwksched.ReadRequestAttribute[requestcontrol.SessionCacheRequest](
+				request,
+				requestcontrol.SessionCacheRequestDataKey.WithNonEmptyProducerName("sessions"),
+			)
+			require.True(t, ok)
+			event := &kvevents.BlockStoredEvent{
+				SessionID:   ptr.To(cacheRequest.Stamp),
+				BlockHashes: []uint64{1},
+				BlockSize:   16,
+			}
+			if test.mutate != nil {
+				test.mutate(event)
+			}
+			source := kvevents.EventSource{ModelName: "model", Endpoint: "pod-a:8000"}
+			require.NoError(t, producer.ProcessEvents(t.Context(), source, kvevents.EventBatch{
+				Events: []kvevents.GenericEvent{event},
+			}))
+			known := testutil.ToFloat64(producer.metrics.eventOutcomes.WithLabelValues("known"))
+			if test.valid {
+				assert.Equal(t, float64(1), known)
+				return
+			}
+			assert.Zero(t, known)
+			require.NoError(t, producer.ProcessEvents(t.Context(), source, kvevents.EventBatch{
+				Events: []kvevents.GenericEvent{&kvevents.BlockStoredEvent{
+					SessionID:   ptr.To(cacheRequest.Stamp),
+					BlockHashes: []uint64{1},
+					BlockSize:   16,
+				}},
+			}))
+			assert.Equal(t, float64(1), testutil.ToFloat64(
+				producer.metrics.eventOutcomes.WithLabelValues("known"),
+			))
+		})
+	}
+}
+
+func TestProcessEventsRejectsExpiredBinding(t *testing.T) {
+	t.Parallel()
+	producer := testProducer(t, true)
+	now := time.Unix(100, 0)
+	producer.bindings.now = func() time.Time { return now }
+	request := eligibleRequest("alias")
+	require.NoError(t, producer.Produce(t.Context(), request, nil))
+	bindRequest(t, producer, request, "pod-a", "8000")
+	cacheRequest, ok := fwksched.ReadRequestAttribute[requestcontrol.SessionCacheRequest](
+		request,
+		requestcontrol.SessionCacheRequestDataKey.WithNonEmptyProducerName("sessions"),
+	)
+	require.True(t, ok)
+	now = now.Add(producer.bindings.ttl)
+	require.NoError(t, producer.ProcessEvents(
+		t.Context(),
+		kvevents.EventSource{ModelName: "model", Endpoint: "pod-a:8000"},
+		kvevents.EventBatch{Events: []kvevents.GenericEvent{&kvevents.BlockStoredEvent{
+			SessionID:   ptr.To(cacheRequest.Stamp),
+			BlockHashes: []uint64{1},
+			BlockSize:   16,
+		}}},
+	))
+	assert.Equal(t, float64(1), testutil.ToFloat64(producer.metrics.eventOutcomes.WithLabelValues("unknown")))
 }
 
 func TestDumpStateContainsNoIdentityData(t *testing.T) {
@@ -210,6 +331,7 @@ func TestDumpStateContainsNoIdentityData(t *testing.T) {
 
 	dump, err := producer.DumpState()
 	require.NoError(t, err)
+	assert.JSONEq(t, `{"activeBindings":1,"maxBindings":100000}`, string(dump))
 	assert.NotContains(t, string(dump), "private-alias")
 	assert.NotContains(t, string(dump), identity.SessionTag)
 	assert.NotContains(t, string(dump), cacheRequest.Stamp)
@@ -239,7 +361,12 @@ func TestMetricsContainNoIdentityData(t *testing.T) {
 
 	families, err := registry.Gather()
 	require.NoError(t, err)
+	require.NotEmpty(t, families)
 	rendered := fmt.Sprint(families)
+	assert.Contains(t, rendered, "session_manager_identity_total")
+	assert.Contains(t, rendered, "session_manager_cache_request_total")
+	assert.Contains(t, rendered, "session_manager_active_bindings")
+	assert.Contains(t, rendered, `value:"published"`)
 	assert.NotContains(t, rendered, "private-alias")
 	assert.NotContains(t, rendered, identity.SessionTag)
 	assert.NotContains(t, rendered, cacheRequest.Stamp)

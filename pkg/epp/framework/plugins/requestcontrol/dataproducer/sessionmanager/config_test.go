@@ -21,10 +21,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/utils/ptr"
 
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 )
@@ -69,7 +72,12 @@ func TestConfigRejectsUnsafeInputs(t *testing.T) {
 		{"deployment surrounding whitespace", func(c *Config) { c.DeploymentID = " prod " }},
 		{"missing key", func(c *Config) { c.HMACKeyFile = "" }},
 		{"invalid ttl", func(c *Config) { c.BindingTTL = "0s" }},
+		{"ttl above maximum", func(c *Config) { c.BindingTTL = "1h1ns" }},
 		{"invalid capacity", func(c *Config) { c.MaxBindings = -1 }},
+		{"capacity above maximum", func(c *Config) { c.MaxBindings = maxBindingsLimit + 1 }},
+		{"deployment above maximum", func(c *Config) {
+			c.DeploymentID = strings.Repeat("d", maxConfigurationLength+1)
+		}},
 		{"correlation without token producer", func(c *Config) { c.EventCorrelationEnabled = true }},
 		{"correlation without namespaces", func(c *Config) {
 			c.EventCorrelationEnabled = true
@@ -80,6 +88,17 @@ func TestConfigRejectsUnsafeInputs(t *testing.T) {
 				{Endpoint: "pod-a", ModelName: "model", CacheNamespace: "one"},
 				{Endpoint: "pod-a", ModelName: "model", CacheNamespace: "two"},
 			}
+		}},
+		{"negative namespace group", func(c *Config) {
+			c.CacheNamespaces = []namespaceConfig{{
+				Endpoint: "pod-a", ModelName: "model", GroupIdx: ptr.To(-1), CacheNamespace: "one",
+			}}
+		}},
+		{"namespace field above maximum", func(c *Config) {
+			c.CacheNamespaces = []namespaceConfig{{
+				Endpoint:  strings.Repeat("e", maxConfigurationLength+1),
+				ModelName: "model", CacheNamespace: "one",
+			}}
 		}},
 	}
 	for _, test := range tests {
@@ -92,6 +111,19 @@ func TestConfigRejectsUnsafeInputs(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestConfigAcceptsResourceBoundaries(t *testing.T) {
+	t.Parallel()
+	cfg, err := (Config{
+		DeploymentID: strings.Repeat("d", maxConfigurationLength),
+		HMACKeyFile:  writeTestKey(t),
+		BindingTTL:   "1h",
+		MaxBindings:  maxBindingsLimit,
+	}).resolve()
+	require.NoError(t, err)
+	assert.Equal(t, time.Hour, cfg.bindingTTL)
+	assert.Equal(t, maxBindingsLimit, cfg.maxBindings)
 }
 
 func TestConfigRejectsWrongKeyLength(t *testing.T) {
