@@ -37,7 +37,7 @@ The framework resolves a DAG from each plugin's `Produces` and `Consumes` declar
 - `p2p-source-producer` **requires** `PrefixCacheMatchInfo` from a prefix producer; set `prefixMatchInfoProducerName` to select a non-default producer instance. Omitting it binds the default key, which auto-wires the approximate producer (no error) — set it explicitly for precise-only deployments. Set `prefillProfileName` to match a renamed `disagg-profile-handler` prefill profile.
 - `predicted-latency-producer` **optionally** consumes `PrefixCacheMatchInfo`; set `prefixMatchInfoProducerName` in its config to the name of the prefix producer instance.
 - `latency-observer-producer-hub` **requires** `InFlightLoad`, so `inflight-load-producer` is ordered ahead of it and auto-created when absent. It must itself be listed under `dataLayer.sources`; auto-creation from `latency-observation-scorer-hub`'s required data key only wires the attribute, not the periodic tick that publishes it. See the [producer README](latencyobserver/README.md#configuration).
-- `session-manager` **requires** `agent-identity`; correlation mode also requires a named `token-producer`. A `session-state-producer` can consume its named `SessionIdentity`, and PR #2716's precise producer can consume its `SessionCacheRequest`.
+- `session-manager` **requires** `agent-identity`; correlation mode also requires a named `token-producer`. A `session-state-producer` can consume its named `SessionIdentity`, and the precise-prefix-cache producer can consume its `SessionCacheRequest`.
 
 ## Related documentation
 
