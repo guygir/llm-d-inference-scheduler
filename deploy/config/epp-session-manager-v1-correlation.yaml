@@ -1,0 +1,70 @@
+# Alpha integration profile for Session Manager v1 correlation validation.
+# This is not the production cache-routing profile: Session Manager v1 emits
+# no SessionCachePrefix, so the precise producer reports zero cache evidence.
+apiVersion: llm-d.ai/v1alpha1
+kind: EndpointPickerConfig
+plugins:
+  - type: agent-identity
+  - type: token-producer
+    name: tokens
+    parameters:
+      modelName: hf-repo/model-name
+      vllm:
+        url: http://localhost:8000
+  - type: session-manager
+    name: sessions
+    parameters:
+      deploymentID: example-single-tenant
+      # Mount this file from a Kubernetes Secret. It contains unpadded base64url
+      # for exactly 32 random bytes.
+      hmacKeyFile: /var/run/secrets/llm-d/session-manager-key
+      tokenProducer: tokens
+      eventCorrelationEnabled: true
+      bindingTTL: 5m
+      maxBindings: 100000
+      cacheNamespaces:
+        # Must exactly match EventSource.Endpoint: <EndpointMetadata.Address>:<Port>.
+        - endpoint: 10.0.0.10:8000
+          modelName: hf-repo/model-name
+          cacheNamespace: model-r1/vllm-seed0/block16/full-attention
+  - type: session-state-producer
+    name: session-statistics
+    parameters:
+      sessionIdentityProducer: sessions
+  - type: endpoint-notification-source
+  - type: metrics-data-source
+  - type: core-metrics-extractor
+  - type: single-profile-handler
+  - type: decode-filter
+  - type: precise-prefix-cache-producer
+    name: correlation-cache
+    parameters:
+      sessionManager: sessions
+      speculativeIndexing: false
+      kvEventsConfig:
+        engineType: vllm
+        discoverPods: true
+        podDiscoveryConfig:
+          socketPort: 5557
+  - type: prefix-cache-scorer
+    parameters:
+      prefixMatchInfoProducerName: correlation-cache
+  - type: queue-scorer
+  - type: max-score-picker
+dataLayer:
+  sources:
+    - pluginRef: metrics-data-source
+      extractors:
+        - pluginRef: core-metrics-extractor
+    - pluginRef: endpoint-notification-source
+      extractors:
+        - pluginRef: correlation-cache
+schedulingProfiles:
+  - name: default
+    plugins:
+      - pluginRef: decode-filter
+      - pluginRef: prefix-cache-scorer
+        weight: 1.0
+      - pluginRef: queue-scorer
+        weight: 1.0
+      - pluginRef: max-score-picker

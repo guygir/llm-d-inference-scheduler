@@ -93,6 +93,46 @@ func TestFactoryAndProduces(t *testing.T) {
 	assert.Empty(t, dependencies.Optional)
 }
 
+func TestConfiguredSessionIdentityIsUsedAcrossLifecycleWithoutRawFallback(t *testing.T) {
+	t.Parallel()
+	decoder := fwkplugin.StrictDecoder(json.RawMessage(`{"sessionIdentityProducer":"sessions"}`))
+	created, err := Factory("state", decoder, nil)
+	require.NoError(t, err)
+	producer := created.(*Producer)
+
+	identityKey := fwkrc.SessionIdentityDataKey.WithNonEmptyProducerName("sessions")
+	dependencies := producer.Consumes()
+	assert.Contains(t, dependencies.Required, identityKey)
+	assert.NotContains(t, dependencies.Required, agentidentity.AgentIdentityKey)
+
+	first := requestWithAgentIdentity("raw-a")
+	first.PutAttribute(identityKey, fwkrc.SessionIdentity{
+		SessionTag:     "normalized",
+		IdentitySource: fwkrc.IdentitySourceAgentIdentityAttribute,
+		ScopeVersion:   "scope",
+	})
+	require.NoError(t, producer.Produce(t.Context(), first, nil))
+	require.NoError(t, producer.PreRequest(t.Context(), first, resultWithProfiles(1)))
+	producer.ResponseBody(t.Context(), first, finalResponse(fwkrc.TerminationCauseNatural, 3, 2), nil)
+
+	second := requestWithAgentIdentity("different-raw-value")
+	second.PutAttribute(identityKey, fwkrc.SessionIdentity{
+		SessionTag:     "normalized",
+		IdentitySource: fwkrc.IdentitySourceAgentIdentityAttribute,
+		ScopeVersion:   "scope",
+	})
+	require.NoError(t, producer.Produce(t.Context(), second, nil))
+	state, ok := fwksched.ReadRequestAttribute[SessionState](second, producer.dk)
+	require.True(t, ok)
+	assert.Equal(t, int64(1), state.TurnsTaken)
+	assert.Equal(t, int64(1), state.CompletedRequests)
+
+	missingNormalized := requestWithAgentIdentity("normalized")
+	require.NoError(t, producer.Produce(t.Context(), missingNormalized, nil))
+	_, ok = fwksched.ReadRequestAttribute[SessionState](missingNormalized, producer.dk)
+	assert.False(t, ok)
+}
+
 func TestAgentIdentityIsARequiredDependency(t *testing.T) {
 	t.Parallel()
 

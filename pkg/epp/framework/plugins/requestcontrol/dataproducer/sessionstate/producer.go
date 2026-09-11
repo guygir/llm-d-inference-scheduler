@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
@@ -43,6 +44,9 @@ type Parameters struct {
 	EvictionTTLSeconds float64 `json:"evictionTtlSeconds,omitempty"`
 	// EvictionSweepSeconds is how often idle session state is scanned.
 	EvictionSweepSeconds float64 `json:"evictionSweepSeconds,omitempty"`
+	// SessionIdentityProducer selects a named producer of normalized
+	// requestcontrol.SessionIdentity. Empty preserves raw agent-identity mode.
+	SessionIdentityProducer string `json:"sessionIdentityProducer,omitempty"`
 }
 
 func (p Parameters) validate() error {
@@ -51,6 +55,13 @@ func (p Parameters) validate() error {
 	}
 	if p.EvictionSweepSeconds <= 0 {
 		return fmt.Errorf("evictionSweepSeconds must be > 0, got %v", p.EvictionSweepSeconds)
+	}
+	identityProducer := strings.TrimSpace(p.SessionIdentityProducer)
+	if p.SessionIdentityProducer != "" && identityProducer == "" {
+		return fmt.Errorf("sessionIdentityProducer must not be whitespace")
+	}
+	if len(identityProducer) > 1024 {
+		return fmt.Errorf("sessionIdentityProducer must be at most 1024 bytes")
 	}
 	return nil
 }
@@ -67,7 +78,9 @@ type Producer struct {
 	typedName fwkplugin.TypedName
 	dk        fwkplugin.DataKey
 
-	registry SessionStateRegistry
+	registry         SessionStateRegistry
+	identityProducer string
+	identityKey      fwkplugin.DataKey
 
 	evictionTTL           time.Duration
 	evictionSweepInterval time.Duration
@@ -91,6 +104,8 @@ func Factory(name string, rawParameters *json.Decoder, handle fwkplugin.Handle) 
 	p := &Producer{
 		typedName:             fwkplugin.TypedName{Type: SessionStateProducerType, Name: name},
 		dk:                    SessionStateDataKey.WithNonEmptyProducerName(name),
+		identityProducer:      strings.TrimSpace(params.SessionIdentityProducer),
+		identityKey:           requestcontrol.SessionIdentityDataKey.WithNonEmptyProducerName(strings.TrimSpace(params.SessionIdentityProducer)),
 		evictionTTL:           time.Duration(params.EvictionTTLSeconds * float64(time.Second)),
 		evictionSweepInterval: time.Duration(params.EvictionSweepSeconds * float64(time.Second)),
 	}
@@ -114,6 +129,11 @@ func (p *Producer) Produces() map[fwkplugin.DataKey]any {
 // plugin is intentionally not a default producer, so operators must enable an
 // identity provider explicitly rather than having one auto-created.
 func (p *Producer) Consumes() fwkplugin.DataDependencies {
+	if p.identityProducer != "" {
+		return fwkplugin.DataDependencies{
+			Required: map[fwkplugin.DataKey]any{p.identityKey: requestcontrol.SessionIdentity{}},
+		}
+	}
 	return fwkplugin.DataDependencies{
 		Required: map[fwkplugin.DataKey]any{agentidentity.AgentIdentityKey: ""},
 	}
@@ -122,7 +142,7 @@ func (p *Producer) Consumes() fwkplugin.DataDependencies {
 // Produce publishes the history observed before the current request is
 // dispatched, then marks the session as seen at the current time.
 func (p *Producer) Produce(_ context.Context, request *fwksched.InferenceRequest, _ []fwksched.Endpoint) error {
-	identity, ok := readAgentIdentity(request)
+	identity, ok := p.readIdentity(request)
 	if !ok {
 		return nil
 	}
@@ -135,7 +155,7 @@ func (p *Producer) Produce(_ context.Context, request *fwksched.InferenceRequest
 // PreRequest records one dispatched turn. A request counts once even when
 // several profiles run.
 func (p *Producer) PreRequest(_ context.Context, request *fwksched.InferenceRequest, _ *fwksched.SchedulingResult) error {
-	identity, ok := readAgentIdentity(request)
+	identity, ok := p.readIdentity(request)
 	if !ok {
 		return nil
 	}
@@ -155,7 +175,7 @@ func (p *Producer) ResponseBody(
 	if response == nil || !response.EndOfStream {
 		return
 	}
-	identity, ok := readAgentIdentity(request)
+	identity, ok := p.readIdentity(request)
 	if !ok {
 		return
 	}
@@ -174,6 +194,17 @@ func readAgentIdentity(request *fwksched.InferenceRequest) (string, bool) {
 	}
 	identity, ok := fwksched.ReadRequestAttribute[string](request, agentidentity.AgentIdentityKey)
 	return identity, ok && identity != ""
+}
+
+func (p *Producer) readIdentity(request *fwksched.InferenceRequest) (string, bool) {
+	if p.identityProducer == "" {
+		return readAgentIdentity(request)
+	}
+	identity, ok := requestcontrol.ReadSessionIdentity(request, p.identityProducer)
+	if !ok {
+		return "", false
+	}
+	return identity.SessionTag, true
 }
 
 func (p *Producer) runEviction(ctx context.Context) {

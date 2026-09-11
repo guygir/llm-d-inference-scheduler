@@ -1,19 +1,23 @@
 # Session State Producer
 
-The `session-state-producer` tracks history for identities published by the
-`agent-identity` request-header plugin and publishes per-request session state
-for scheduling plugins through the request attribute store.
+The `session-state-producer` tracks history for raw identities published by the
+`agent-identity` request-header plugin, or for scoped identities published by a
+named `session-manager`, and publishes per-request session state for scheduling
+plugins through the request attribute store.
 
-The producer uses only the `agent-identity` attribute. `SessionIDDataKey` is a
-separate attribute produced by `session-id-producer` from one configured header
-or cookie for general session-affinity use.
+By default the producer uses the `agent-identity` attribute. When
+`sessionIdentityProducer` is set, it instead requires that producer's
+`SessionIdentity` and keys every lifecycle hook by `SessionTag`; it never falls
+back to raw identity per request. `SessionIDDataKey` remains a separate
+attribute produced by `session-id-producer`.
 
 ## Configuration
 
 Both plugins must be enabled, and Alpha plugins must be allowed by the EPP
 process. `agent-identity` is a required data dependency, so configuration
 loading fails if no plugin declares that it produces the agent identity
-attribute.
+attribute. Manager mode additionally requires
+`--allow-experimental-plugins=true`.
 
 ```yaml
 plugins:
@@ -24,10 +28,26 @@ plugins:
     evictionSweepSeconds: 300
 ```
 
+To key state by the manager's scoped identity:
+
+```yaml
+plugins:
+- type: agent-identity
+- type: session-manager
+  name: sessions
+  parameters:
+    deploymentID: payments-prod-eu1
+    hmacKeyFile: /var/run/secrets/llm-d/session-manager-key
+- type: session-state-producer
+  parameters:
+    sessionIdentityProducer: sessions
+```
+
 | Parameter | Default | Description |
 |---|---:|---|
 | `evictionTtlSeconds` | `3600` | Maximum session idle time before its state is removed. Set to `0` to disable eviction. |
 | `evictionSweepSeconds` | `300` | Interval between idle-state scans. Must be greater than `0`. |
+| `sessionIdentityProducer` | unset | Optional named producer of scoped `SessionIdentity`. Unset preserves raw `agent-identity` behavior. |
 
 ## Produced data
 
