@@ -115,7 +115,7 @@ func TestCacheNamespaceRemainsUnsetAndResetInvalidatesDiscoveredEndpoint(t *test
 	producer.bindings.put("stamp", "session", "model")
 	require.True(t, producer.bindings.bindEndpoint("stamp", "10.0.0.2:8000"))
 	require.NoError(t, producer.Reset(context.Background(), "10.0.0.2:8000"))
-	_, known, _, mismatch, stale := producer.bindings.observe("stamp", "model", "10.0.0.2:8000")
+	known, _, mismatch, stale := producer.bindings.observe("stamp", "model", "10.0.0.2:8000")
 	assert.True(t, known)
 	assert.False(t, mismatch)
 	assert.True(t, stale)

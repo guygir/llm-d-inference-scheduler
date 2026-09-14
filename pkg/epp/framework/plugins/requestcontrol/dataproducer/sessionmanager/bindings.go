@@ -91,27 +91,27 @@ func (s *bindingStore) bindEndpoint(stamp, endpoint string) bool {
 	return true
 }
 
-func (s *bindingStore) observe(stamp, modelName, endpoint string) (requestBinding, bool, bool, bool, bool) {
+func (s *bindingStore) observe(stamp, modelName, endpoint string) (bool, bool, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
 	entry, ok := s.items[stamp]
 	if !ok {
-		return requestBinding{}, false, false, false, false
+		return false, false, false, false
 	}
 	if !entry.binding.createdAt.Add(s.ttl).After(now) {
 		s.removeLocked(stamp, entry)
-		return requestBinding{}, false, false, false, false
+		return false, false, false, false
 	}
 	if entry.binding.modelName != modelName || entry.binding.endpoint != endpoint {
-		return requestBinding{}, true, false, true, false
+		return true, false, true, false
 	}
 	if resetAt, ok := s.resetAt[endpoint]; ok && !entry.binding.boundAt.After(resetAt) {
-		return requestBinding{}, true, false, false, true
+		return true, false, false, true
 	}
 	duplicate := entry.binding.observed
 	entry.binding.observed = true
-	return entry.binding, true, duplicate, false, false
+	return true, duplicate, false, false
 }
 
 func (s *bindingStore) resetEndpoint(endpoint string) {

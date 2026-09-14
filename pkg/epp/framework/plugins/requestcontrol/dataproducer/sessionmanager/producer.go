@@ -224,7 +224,7 @@ func (p *Producer) ProcessEvents(ctx context.Context, source kvevents.EventSourc
 			p.metrics.eventOutcomes.WithLabelValues("unstamped").Inc()
 			continue
 		}
-		_, known, duplicate, mismatch, stale := p.bindings.observe(
+		known, duplicate, mismatch, stale := p.bindings.observe(
 			*stored.SessionID,
 			source.ModelName,
 			source.Endpoint,

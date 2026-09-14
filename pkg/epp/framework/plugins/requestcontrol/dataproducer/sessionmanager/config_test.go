@@ -73,7 +73,6 @@ func TestConfigRejectsUnsafeInputs(t *testing.T) {
 		{"correlation without token producer", func(c *Config) { c.EventCorrelationEnabled = true }},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := valid
