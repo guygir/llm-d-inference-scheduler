@@ -22,11 +22,6 @@ plugins:
       eventCorrelationEnabled: true
       bindingTTL: 5m
       maxBindings: 100000
-      cacheNamespaces:
-        # Must exactly match EventSource.Endpoint: <EndpointMetadata.Address>:<Port>.
-        - endpoint: 10.0.0.10:8000
-          modelName: hf-repo/model-name
-          cacheNamespace: model-r1/vllm-seed0/block16/full-attention
   - type: session-state-producer
     name: session-statistics
     parameters:
@@ -43,6 +38,7 @@ plugins:
       speculativeIndexing: false
       kvEventsConfig:
         engineType: vllm
+        topicFilter: "kv@"
         discoverPods: true
         podDiscoveryConfig:
           socketPort: 5557
