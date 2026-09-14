@@ -27,7 +27,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 )
@@ -41,7 +40,6 @@ func writeTestKey(t *testing.T) string {
 
 func TestConfigResolve(t *testing.T) {
 	t.Parallel()
-	group := 0
 	cfg, err := (Config{
 		DeploymentID:            "prod-a",
 		HMACKeyFile:             writeTestKey(t),
@@ -49,15 +47,9 @@ func TestConfigResolve(t *testing.T) {
 		EventCorrelationEnabled: true,
 		BindingTTL:              "1m",
 		MaxBindings:             10,
-		CacheNamespaces: []namespaceConfig{
-			{Endpoint: "pod-a", ModelName: "model", CacheNamespace: "model/default"},
-			{Endpoint: "pod-a", ModelName: "model", GroupIdx: &group, CacheNamespace: "model/group-0"},
-		},
 	}).resolve()
 	require.NoError(t, err)
 	assert.Len(t, cfg.hmacKey, 32)
-	assert.Equal(t, "model/default", cfg.cacheNamespaces[makeNamespaceKey("pod-a", "model", nil)])
-	assert.Equal(t, "model/group-0", cfg.cacheNamespaces[makeNamespaceKey("pod-a", "model", &group)])
 }
 
 func TestConfigRejectsUnsafeInputs(t *testing.T) {
@@ -79,27 +71,6 @@ func TestConfigRejectsUnsafeInputs(t *testing.T) {
 			c.DeploymentID = strings.Repeat("d", maxConfigurationLength+1)
 		}},
 		{"correlation without token producer", func(c *Config) { c.EventCorrelationEnabled = true }},
-		{"correlation without namespaces", func(c *Config) {
-			c.EventCorrelationEnabled = true
-			c.TokenProducer = "tokens"
-		}},
-		{"duplicate namespace", func(c *Config) {
-			c.CacheNamespaces = []namespaceConfig{
-				{Endpoint: "pod-a", ModelName: "model", CacheNamespace: "one"},
-				{Endpoint: "pod-a", ModelName: "model", CacheNamespace: "two"},
-			}
-		}},
-		{"negative namespace group", func(c *Config) {
-			c.CacheNamespaces = []namespaceConfig{{
-				Endpoint: "pod-a", ModelName: "model", GroupIdx: ptr.To(-1), CacheNamespace: "one",
-			}}
-		}},
-		{"namespace field above maximum", func(c *Config) {
-			c.CacheNamespaces = []namespaceConfig{{
-				Endpoint:  strings.Repeat("e", maxConfigurationLength+1),
-				ModelName: "model", CacheNamespace: "one",
-			}}
-		}},
 	}
 	for _, test := range tests {
 		test := test

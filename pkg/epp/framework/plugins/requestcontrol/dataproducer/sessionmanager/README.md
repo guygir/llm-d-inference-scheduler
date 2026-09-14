@@ -25,23 +25,15 @@ signal.
     eventCorrelationEnabled: true
     bindingTTL: 5m
     maxBindings: 100000
-    cacheNamespaces:
-    - endpoint: 10.0.0.10:8000
-      modelName: example/model
-      cacheNamespace: example-r7/vllm-seed0/block16/full-attention
 ```
 
 `hmacKeyFile` must contain the unpadded base64url encoding of exactly 32 random
 bytes. Mount it from an operator-managed Kubernetes Secret. The manager reads it
 once at startup and never exposes it.
 
-Each `cacheNamespace` value is an operator assertion that the exact event-source
-`endpoint`, named model, and optional source-local `groupIdx` use compatible
-model revisions, engine hash protocol and seed, block size, and cache-group
-semantics. Unknown endpoint/model/group mappings are rejected. Update endpoint
-entries with the serving fleet. `endpoint` must exactly match
-`EventSource.Endpoint`, which discovery currently emits as
-`<EndpointMetadata.Address>:<Port>` (for example `10.0.0.10:8000`). The
+Version 1 publishes no engine-block prefixes, so it neither requires nor
+asserts cache compatibility across workers. Pod endpoints and event-local
+cache-group metadata come from the existing KV-event discovery path. The
 client-provided identity is not authentication or tenant isolation.
 
 ## Outputs

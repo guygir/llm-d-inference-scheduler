@@ -28,9 +28,8 @@ import (
 type SessionCacheManager interface {
 	DataProducer
 	kvevents.EventConsumer
-	// CacheNamespace resolves configured engine-hash compatibility for a
-	// source and cache group. Empty means unconfigured. The mapping must be
-	// stable until the source resets; group numbers are local to each source.
+	// CacheNamespace returns the namespace used by any engine-block prefixes
+	// this manager emits. Empty is valid when the manager emits no prefixes.
 	CacheNamespace(kvevents.EventSource, *int) string
 }
 

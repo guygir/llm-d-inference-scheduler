@@ -47,13 +47,12 @@ func TestSessionManagerPublishesZeroPrefixEvidenceAndStampsRequest(t *testing.T)
 		"deploymentID":"test",
 		"hmacKeyFile":%q,
 		"tokenProducer":"tokens",
-		"eventCorrelationEnabled":true,
-		"cacheNamespaces":[{"endpoint":"10.0.0.1:8000","modelName":"model","cacheNamespace":"model-v1"}]
+		"eventCorrelationEnabled":true
 	}`, keyPath)
 	created, err := sessionmanager.Factory("sessions", fwkplugin.StrictDecoder(json.RawMessage(managerJSON)), handle)
 	require.NoError(t, err)
 	manager := created.(*sessionmanager.Producer)
-	assert.Equal(t, "model-v1", manager.CacheNamespace(
+	assert.Empty(t, manager.CacheNamespace(
 		kvevents.EventSource{Endpoint: "10.0.0.1:8000", ModelName: "model"},
 		nil,
 	))

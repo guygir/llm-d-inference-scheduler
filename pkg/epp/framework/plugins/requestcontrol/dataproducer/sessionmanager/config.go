@@ -33,22 +33,14 @@ const (
 	sessionManagerKeyBytes = 32
 )
 
-type namespaceConfig struct {
-	Endpoint       string `json:"endpoint"`
-	ModelName      string `json:"modelName"`
-	GroupIdx       *int   `json:"groupIdx,omitempty"`
-	CacheNamespace string `json:"cacheNamespace"`
-}
-
 // Config configures the session-manager plugin.
 type Config struct {
-	DeploymentID            string            `json:"deploymentID"`
-	HMACKeyFile             string            `json:"hmacKeyFile"`
-	TokenProducer           string            `json:"tokenProducer,omitempty"`
-	EventCorrelationEnabled bool              `json:"eventCorrelationEnabled,omitempty"`
-	BindingTTL              string            `json:"bindingTTL,omitempty"`
-	MaxBindings             int               `json:"maxBindings,omitempty"`
-	CacheNamespaces         []namespaceConfig `json:"cacheNamespaces,omitempty"`
+	DeploymentID            string `json:"deploymentID"`
+	HMACKeyFile             string `json:"hmacKeyFile"`
+	TokenProducer           string `json:"tokenProducer,omitempty"`
+	EventCorrelationEnabled bool   `json:"eventCorrelationEnabled,omitempty"`
+	BindingTTL              string `json:"bindingTTL,omitempty"`
+	MaxBindings             int    `json:"maxBindings,omitempty"`
 }
 
 type resolvedConfig struct {
@@ -58,8 +50,6 @@ type resolvedConfig struct {
 	eventCorrelationEnabled bool
 	bindingTTL              time.Duration
 	maxBindings             int
-	cacheNamespaces         map[namespaceKey]string
-	cacheEndpoints          map[string]struct{}
 }
 
 func (c Config) resolve() (resolvedConfig, error) {
@@ -69,8 +59,6 @@ func (c Config) resolve() (resolvedConfig, error) {
 		eventCorrelationEnabled: c.EventCorrelationEnabled,
 		bindingTTL:              defaultBindingTTL,
 		maxBindings:             defaultMaxBindings,
-		cacheNamespaces:         make(map[namespaceKey]string, len(c.CacheNamespaces)),
-		cacheEndpoints:          make(map[string]struct{}),
 	}
 	if strings.TrimSpace(cfg.deploymentID) == "" ||
 		cfg.deploymentID != strings.TrimSpace(cfg.deploymentID) ||
@@ -106,33 +94,6 @@ func (c Config) resolve() (resolvedConfig, error) {
 	}
 	if cfg.eventCorrelationEnabled && cfg.tokenProducer == "" {
 		return resolvedConfig{}, errors.New("tokenProducer is required when eventCorrelationEnabled is true")
-	}
-	for _, item := range c.CacheNamespaces {
-		endpoint := strings.TrimSpace(item.Endpoint)
-		model := strings.TrimSpace(item.ModelName)
-		namespace := strings.TrimSpace(item.CacheNamespace)
-		if item.GroupIdx != nil && *item.GroupIdx < 0 {
-			return resolvedConfig{}, errors.New("cacheNamespaces groupIdx must be nonnegative")
-		}
-		if endpoint == "" || model == "" || namespace == "" ||
-			len(endpoint) > maxConfigurationLength ||
-			len(model) > maxConfigurationLength || len(namespace) > maxConfigurationLength {
-			return resolvedConfig{}, errors.New("cacheNamespaces entries require bounded endpoint, modelName, and cacheNamespace")
-		}
-		key := makeNamespaceKey(endpoint, model, item.GroupIdx)
-		if _, exists := cfg.cacheNamespaces[key]; exists {
-			return resolvedConfig{}, fmt.Errorf(
-				"duplicate cache namespace mapping for endpoint %q, model %q, and group %s",
-				endpoint,
-				model,
-				key.group,
-			)
-		}
-		cfg.cacheNamespaces[key] = namespace
-		cfg.cacheEndpoints[endpoint] = struct{}{}
-	}
-	if cfg.eventCorrelationEnabled && len(cfg.cacheNamespaces) == 0 {
-		return resolvedConfig{}, errors.New("cacheNamespaces is required when eventCorrelationEnabled is true")
 	}
 	return cfg, nil
 }

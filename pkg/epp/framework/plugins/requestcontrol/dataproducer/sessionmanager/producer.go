@@ -49,15 +49,13 @@ type Producer struct {
 	cacheRequestKey fwkplugin.DataKey
 	tokenKey        fwkplugin.DataKey
 
-	deploymentID    string
-	hmacKey         []byte
-	scopeVersion    string
-	correlation     bool
-	cacheNamespaces map[namespaceKey]string
-	cacheEndpoints  map[string]struct{}
-	stamps          *stampGenerator
-	bindings        *bindingStore
-	metrics         *managerMetrics
+	deploymentID string
+	hmacKey      []byte
+	scopeVersion string
+	correlation  bool
+	stamps       *stampGenerator
+	bindings     *bindingStore
+	metrics      *managerMetrics
 }
 
 // Factory constructs a configured session-manager.
@@ -101,8 +99,6 @@ func Factory(name string, decoder *json.Decoder, handle fwkplugin.Handle) (fwkpl
 		hmacKey:         resolved.hmacKey,
 		scopeVersion:    scopeVersion,
 		correlation:     resolved.eventCorrelationEnabled,
-		cacheNamespaces: resolved.cacheNamespaces,
-		cacheEndpoints:  resolved.cacheEndpoints,
 		stamps:          stamps,
 		bindings:        bindings,
 		metrics:         metrics,
@@ -210,10 +206,9 @@ func (p *Producer) PreRequest(
 	return nil
 }
 
-// CacheNamespace returns only preconfigured endpoint/model/group compatibility.
-func (p *Producer) CacheNamespace(source kvevents.EventSource, group *int) string {
-	return p.cacheNamespaces[makeNamespaceKey(source.Endpoint, source.ModelName, group)]
-}
+// CacheNamespace is empty in v1 because the manager publishes no engine-block
+// prefixes. Compatibility is therefore neither asserted nor operator-configured.
+func (p *Producer) CacheNamespace(kvevents.EventSource, *int) string { return "" }
 
 // ProcessEvents validates known request stamps for observability only.
 func (p *Producer) ProcessEvents(ctx context.Context, source kvevents.EventSource, batch kvevents.EventBatch) error {
@@ -227,10 +222,6 @@ func (p *Producer) ProcessEvents(ctx context.Context, source kvevents.EventSourc
 		}
 		if stored.SessionID == nil || *stored.SessionID == "" {
 			p.metrics.eventOutcomes.WithLabelValues("unstamped").Inc()
-			continue
-		}
-		if p.CacheNamespace(source, stored.GroupIdx) == "" {
-			p.metrics.eventOutcomes.WithLabelValues("namespace_rejected").Inc()
 			continue
 		}
 		_, known, duplicate, mismatch, stale := p.bindings.observe(
@@ -260,7 +251,7 @@ func (p *Producer) Reset(ctx context.Context, endpoint string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, configured := p.cacheEndpoints[endpoint]; configured {
+	if p.correlation {
 		p.bindings.resetEndpoint(endpoint)
 	}
 	p.metrics.eventOutcomes.WithLabelValues("reset").Inc()

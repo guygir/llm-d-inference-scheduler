@@ -44,12 +44,7 @@ func testProducer(t *testing.T, correlation bool) *Producer {
 		"deploymentID":"prod-a",
 		"hmacKeyFile":%q,
 		"tokenProducer":"tokens",
-		"eventCorrelationEnabled":%t,
-		"cacheNamespaces":[
-			{"endpoint":"pod-a:8000","modelName":"model","cacheNamespace":"model-v1"},
-			{"endpoint":"pod-b:8000","modelName":"model","cacheNamespace":"model-v1"},
-			{"endpoint":"pod-a:8000","modelName":"other-model","cacheNamespace":"other-model-v1"}
-		]
+		"eventCorrelationEnabled":%t
 	}`, writeTestKey(t), correlation)
 	created, err := Factory("sessions", fwkplugin.StrictDecoder(json.RawMessage(raw)), nil)
 	require.NoError(t, err)
@@ -110,6 +105,22 @@ func TestProducePublishesIdentityAndEmptyPrefixRequest(t *testing.T) {
 	assert.Equal(t, 1, producer.bindings.len())
 }
 
+func TestCacheNamespaceRemainsUnsetAndResetInvalidatesDiscoveredEndpoint(t *testing.T) {
+	t.Parallel()
+	producer := testProducer(t, true)
+	assert.Empty(t, producer.CacheNamespace(
+		kvevents.EventSource{Endpoint: "10.0.0.2:8000", ModelName: "model"}, ptr.To(0),
+	))
+
+	producer.bindings.put("stamp", "session", "model")
+	require.True(t, producer.bindings.bindEndpoint("stamp", "10.0.0.2:8000"))
+	require.NoError(t, producer.Reset(context.Background(), "10.0.0.2:8000"))
+	_, known, _, mismatch, stale := producer.bindings.observe("stamp", "model", "10.0.0.2:8000")
+	assert.True(t, known)
+	assert.False(t, mismatch)
+	assert.True(t, stale)
+}
+
 func TestProduceIdentityOnlyAndFailOpenShapes(t *testing.T) {
 	t.Parallel()
 	identityOnly := testProducer(t, false)
@@ -156,7 +167,7 @@ func TestProduceIdentityOnlyAndFailOpenShapes(t *testing.T) {
 	assert.False(t, cacheOK)
 }
 
-func TestProcessEventsCorrelatesKnownCompatibleStampOnly(t *testing.T) {
+func TestProcessEventsCorrelatesKnownScopedStampOnly(t *testing.T) {
 	t.Parallel()
 	producer := testProducer(t, true)
 	request := eligibleRequest("alias")
@@ -211,16 +222,6 @@ func TestProcessEventsCorrelatesKnownCompatibleStampOnly(t *testing.T) {
 		Events: []kvevents.GenericEvent{event},
 	}))
 	assert.Equal(t, float64(2), testutil.ToFloat64(producer.metrics.eventOutcomes.WithLabelValues("request_mismatch")))
-
-	source.ModelName = "unknown-model"
-	require.NoError(t, producer.ProcessEvents(context.Background(), source, kvevents.EventBatch{
-		Events: []kvevents.GenericEvent{event},
-	}))
-	assert.Equal(t, float64(1), testutil.ToFloat64(producer.metrics.eventOutcomes.WithLabelValues("namespace_rejected")))
-	assert.Empty(t, producer.CacheNamespace(
-		kvevents.EventSource{ModelName: "model", Endpoint: "unknown"},
-		nil,
-	))
 
 	require.NoError(t, producer.Reset(t.Context(), "pod-a:8000"))
 	source.ModelName = "model"
@@ -344,8 +345,7 @@ func TestMetricsContainNoIdentityData(t *testing.T) {
 		"deploymentID":"prod-a",
 		"hmacKeyFile":%q,
 		"tokenProducer":"tokens",
-		"eventCorrelationEnabled":true,
-		"cacheNamespaces":[{"endpoint":"pod-a:8000","modelName":"model","cacheNamespace":"model-v1"}]
+		"eventCorrelationEnabled":true
 	}`, writeTestKey(t))
 	handle := fwkplugin.NewEppHandle(t.Context(), nil, fwkplugin.WithMetricsRecorder(registry))
 	created, err := Factory("sessions", fwkplugin.StrictDecoder(json.RawMessage(raw)), handle)
