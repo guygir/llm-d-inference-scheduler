@@ -381,6 +381,8 @@ func addBlockItem(itemsByHash map[string]attrmm.MatchItem, block fwkrh.ContentBl
 		addItem(itemsByHash, contentHash("image_url", block.ImageURL.URL), string(fwkrh.ModalityImage))
 	case block.VideoURL.URL != "":
 		addItem(itemsByHash, contentHash("video_url", block.VideoURL.URL), string(fwkrh.ModalityVideo))
+	case block.AudioURL.URL != "":
+		addItem(itemsByHash, contentHash("audio_url", block.AudioURL.URL), string(fwkrh.ModalityAudio))
 	case block.InputAudio.Data != "":
 		addItem(itemsByHash, contentHash("input_audio", block.InputAudio.Format+":"+block.InputAudio.Data), string(fwkrh.ModalityAudio))
 	}

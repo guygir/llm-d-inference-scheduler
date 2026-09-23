@@ -179,6 +179,28 @@ func TestExtractMMItemsFromStructuredChatMedia(t *testing.T) {
 	}, items)
 }
 
+func TestExtractMMItemsFromStructuredChatAudioURL(t *testing.T) {
+	audioURL := "https://example.com/clip.wav"
+	items := ExtractMMItems(&scheduling.InferenceRequest{
+		Body: &fwkrh.InferenceRequestBody{
+			ChatCompletions: &fwkrh.ChatCompletionsRequest{
+				Messages: []fwkrh.Message{{
+					Role: "user",
+					Content: fwkrh.Content{Structured: []fwkrh.ContentBlock{
+						{Type: "audio_url", AudioURL: fwkrh.AudioURLBlock{URL: audioURL}},
+						{Type: "input_audio", InputAudio: fwkrh.AudioBlock{Data: "AAAA", Format: "wav"}},
+					}},
+				}},
+			},
+		},
+	})
+
+	assert.ElementsMatch(t, []attrmm.MatchItem{
+		{Hash: contentHash("audio_url", audioURL), Size: 1, Modality: string(fwkrh.ModalityAudio)},
+		{Hash: contentHash("input_audio", "wav:AAAA"), Size: 1, Modality: string(fwkrh.ModalityAudio)},
+	}, items)
+}
+
 func TestProduceMatchesMultiplePodsAndPreRequestUpdatesPlacement(t *testing.T) {
 	producer := newTestProducer(t, nil, nil)
 	podA := k8stypes.NamespacedName{Namespace: "default", Name: "pod-a"}
